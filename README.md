@@ -97,4 +97,6 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 
 - Runtime config template: `config/meow.example.toml`
 - Master plan: `docs/MEOWSOMA_MASTER_PLAN.md`
+- Detailed phase plan: `docs/PHASE_IMPLEMENTATION_PLAN.md`
 - Config responsibilities: `docs/CONFIG.md`
+- Contributor/agent collaboration guide: `AGENTS.md`

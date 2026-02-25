@@ -9,6 +9,11 @@ Build `meow-soma` as a Rust CLI with command name `meow` that unifies:
 The runtime is intentionally single-agent for MVP.
 Multi-agent is used only for development workflow via Codex CLI config.
 
+## Execution Source of Truth
+- High-level roadmap: this file
+- Detailed phase-by-phase implementation: `docs/PHASE_IMPLEMENTATION_PLAN.md`
+- Contributor and agent operating rules: `AGENTS.md`
+
 ## Locked Decisions
 - Project name: `meow-soma`
 - CLI binary: `meow`
