@@ -70,3 +70,31 @@ where thought becomes execution.
 
 If intelligence is the mind,  
 Meow Soma is the body.
+
+---
+
+## Current MVP Scaffold (Implemented)
+
+This repository now includes a working Rust CLI scaffold with command name `meow`.
+
+### Command Surface
+
+- `meow chat`
+- `meow ask "<prompt>"`
+- `meow run "<goal>"`
+- `meow tool list`
+- `meow tool exec <tool> ... [--approve]`
+- `meow mcp serve --transport stdio`
+- `meow session list|resume|export`
+- `meow config init|validate|path`
+
+### Config Separation
+
+- Runtime config for Meow users: `~/.meow-soma/config.toml`
+- Development multi-agent config for Codex CLI only: `.codex/config.toml`
+
+### Reference Files
+
+- Runtime config template: `config/meow.example.toml`
+- Master plan: `docs/MEOWSOMA_MASTER_PLAN.md`
+- Config responsibilities: `docs/CONFIG.md`
