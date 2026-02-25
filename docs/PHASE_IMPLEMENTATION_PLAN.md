@@ -35,6 +35,15 @@ Acceptance evidence:
 Objective:
 - Replace provider stubs with production integrations for OpenAI, Anthropic, and Ollama.
 
+Current status:
+- Baseline implemented:
+  - Live HTTP adapters for OpenAI/Anthropic/Ollama
+  - API key lookup from env for OpenAI/Anthropic
+  - Timeout + retry behavior from config
+  - Error normalization (`auth`, `rate_limit`, `timeout`, `invalid_request`, `server`, `transport`, `parse`)
+- Remaining hardening:
+  - Add provider-specific integration tests for OpenAI/Anthropic with mocked authenticated responses
+
 Scope:
 - Implement HTTP clients for each provider.
 - Add API key resolution from environment variables.

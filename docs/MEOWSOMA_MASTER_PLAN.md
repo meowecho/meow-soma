@@ -102,6 +102,6 @@ Failure scenarios:
   - Mitigation: provider trait boundary + adapter isolation
 
 ## Immediate Next Steps
-1. Implement real provider adapters (OpenAI, Anthropic, Ollama)
-2. Add unit/integration tests for policy + state + CLI flows
+1. Expand unit/integration tests for policy + state + CLI flows
+2. Harden tool safety and workspace boundaries (Phase 3)
 3. Add release automation and installation docs

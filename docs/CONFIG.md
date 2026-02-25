@@ -17,6 +17,22 @@ Main sections:
 Template source in this repo:
 - `config/meow.example.toml`
 
+Provider authentication and runtime behavior:
+- OpenAI:
+  - Endpoint default: `https://api.openai.com/v1`
+  - API key env default: `OPENAI_API_KEY`
+- Anthropic:
+  - Endpoint default: `https://api.anthropic.com`
+  - API key env default: `ANTHROPIC_API_KEY`
+- Ollama:
+  - Endpoint default: `http://127.0.0.1:11434`
+  - No API key required by default
+
+Retry and timeout:
+- `runtime.retry_budget` controls provider retry attempts for retryable failures
+- `providers.<name>.timeout_secs` controls HTTP request timeout per attempt
+- Retryable errors include timeout, rate-limit, and most server-side failures
+
 ## 2) Development Config (Codex CLI)
 - Path in repo: `.codex/config.toml`
 - Used only during development to define a multi-agent team in Codex CLI
