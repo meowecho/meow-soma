@@ -105,6 +105,44 @@ Verification commands:
 - `cargo check`
 - `cargo test runtime`
 
+## Phase 2.5 - Claude Code/Codex-Style Terminal UI (TUI)
+
+Objective:
+- Deliver an agentic terminal interface that feels like Claude Code/Codex workflows while keeping single-agent runtime architecture.
+
+Scope:
+- Add full-screen TUI mode for interactive usage.
+- Add streaming assistant output in terminal.
+- Add inline approval prompts for risky tool execution.
+- Add session/status panels that keep users inside one continuous workflow.
+
+Implementation tasks:
+1. Add `meow tui` command and event loop using terminal UI primitives.
+2. Implement panes: transcript, input, status, and tool timeline.
+3. Implement token streaming rendering path in chat/run flows.
+4. Add inline approval interactions tied to permission gate decisions.
+5. Add slash commands in TUI (`/help`, `/provider`, `/model`, `/session`, `/clear`).
+6. Add keyboard controls for history, scrolling, and command palette behavior.
+7. Add graceful resize/repaint handling and crash-safe terminal restore.
+
+Deliverables:
+- TUI runtime module(s) and command wiring in CLI/app layers.
+- Streaming output path shared by `chat` and TUI mode.
+- Inline approval UX connected to policy engine.
+- User docs for TUI controls and troubleshooting.
+
+Definition of done:
+- `meow tui` runs as a stable full-screen interface.
+- User can chat, run tasks, approve/reject risky actions, and inspect timeline in one screen.
+- Streaming output is visible token-by-token without waiting for full completion.
+- Terminal state is restored correctly after exit or panic.
+
+Verification commands:
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test tui`
+- Manual smoke: `meow tui` + provider call + one approval flow
+
 ## Phase 3 - Tool Safety and Execution Hardening
 
 Objective:

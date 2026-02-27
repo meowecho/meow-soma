@@ -58,17 +58,22 @@ Multi-agent is used only for development workflow via Codex CLI config.
 - Single-agent goal execution scaffold
 - Run history persistence
 
-4. Tool Body
+4. Claude Code/Codex-Style TUI
+- Full-screen terminal UI (`meow tui`)
+- Streaming responses and inline approval flows
+- Continuous transcript/status/tool timeline panels
+
+5. Tool Body
 - Built-in tool registry
 - Policy-gated execution with approvals
 - Tool/audit logs
 
-5. MCP Serve
+6. MCP Serve
 - stdio server loop
 - JSON request/response contract
 - Tool invocation via runtime gate
 
-6. Hardening
+7. Hardening
 - Replace stub providers with live adapters
 - Add integration tests and failure handling
 - Packaging and release tasks
@@ -102,6 +107,6 @@ Failure scenarios:
   - Mitigation: provider trait boundary + adapter isolation
 
 ## Immediate Next Steps
-1. Expand unit/integration tests for policy + state + CLI flows
-2. Harden tool safety and workspace boundaries (Phase 3)
-3. Add release automation and installation docs
+1. Start Phase 2.5 implementation (`meow tui` + streaming + inline approvals)
+2. Expand unit/integration tests for policy + state + CLI flows
+3. Harden tool safety and workspace boundaries (Phase 3)
