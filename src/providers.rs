@@ -526,9 +526,10 @@ fn parse_ollama_text(value: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::mpsc;
+    use std::sync::{Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
 
@@ -636,10 +637,158 @@ mod tests {
         handle.join().expect("mock server thread should join");
     }
 
+    #[test]
+    fn openai_provider_success_with_mock_response() {
+        let (endpoint, requests, handle) = spawn_mock_server(vec![MockResponse {
+            status: 200,
+            body: "{\"choices\":[{\"message\":{\"content\":\"ok from openai\"}}]}".to_owned(),
+        }]);
+
+        let output = with_env_var("MEOW_TEST_OPENAI_KEY", "dummy-openai-key", || {
+            let provider = HttpProvider::new(
+                ProviderKind::OpenAi,
+                ProviderConfig {
+                    model: "gpt-4.1".to_owned(),
+                    endpoint: Some(endpoint),
+                    api_key_env: Some("MEOW_TEST_OPENAI_KEY".to_owned()),
+                    timeout_secs: 2,
+                },
+                0,
+            );
+            provider.complete("hello")
+        })
+        .expect("openai provider should parse mocked success response");
+
+        assert_eq!(output, "ok from openai");
+        let req = requests
+            .recv_timeout(Duration::from_secs(1))
+            .expect("request should be captured");
+        let req_lower = req.to_lowercase();
+        assert!(req.contains("POST /chat/completions"));
+        assert!(req_lower.contains("authorization: bearer dummy-openai-key"));
+        handle.join().expect("mock server thread should join");
+    }
+
+    #[test]
+    fn anthropic_provider_success_with_mock_response() {
+        let (endpoint, requests, handle) = spawn_mock_server(vec![MockResponse {
+            status: 200,
+            body: "{\"content\":[{\"type\":\"text\",\"text\":\"ok from anthropic\"}]}".to_owned(),
+        }]);
+
+        let output = with_env_var("MEOW_TEST_ANTHROPIC_KEY", "dummy-anthropic-key", || {
+            let provider = HttpProvider::new(
+                ProviderKind::Anthropic,
+                ProviderConfig {
+                    model: "claude-3-7-sonnet-latest".to_owned(),
+                    endpoint: Some(endpoint),
+                    api_key_env: Some("MEOW_TEST_ANTHROPIC_KEY".to_owned()),
+                    timeout_secs: 2,
+                },
+                0,
+            );
+            provider.complete("hello")
+        })
+        .expect("anthropic provider should parse mocked success response");
+
+        assert_eq!(output, "ok from anthropic");
+        let req = requests
+            .recv_timeout(Duration::from_secs(1))
+            .expect("request should be captured");
+        let req_lower = req.to_lowercase();
+        assert!(req.contains("POST /v1/messages"));
+        assert!(req_lower.contains("x-api-key: dummy-anthropic-key"));
+        assert!(req_lower.contains("anthropic-version: 2023-06-01"));
+        handle.join().expect("mock server thread should join");
+    }
+
+    #[test]
+    fn openai_provider_maps_auth_error_end_to_end() {
+        let (endpoint, _requests, handle) = spawn_mock_server(vec![MockResponse {
+            status: 401,
+            body: "{\"error\":{\"message\":\"invalid api key\"}}".to_owned(),
+        }]);
+
+        let err = with_env_var("MEOW_TEST_OPENAI_KEY_AUTH", "dummy-openai-key", || {
+            let provider = HttpProvider::new(
+                ProviderKind::OpenAi,
+                ProviderConfig {
+                    model: "gpt-4.1".to_owned(),
+                    endpoint: Some(endpoint),
+                    api_key_env: Some("MEOW_TEST_OPENAI_KEY_AUTH".to_owned()),
+                    timeout_secs: 2,
+                },
+                0,
+            );
+            provider
+                .complete("hello")
+                .expect_err("auth error should bubble from provider")
+                .to_string()
+        });
+
+        assert!(err.contains("kind=auth"));
+        handle.join().expect("mock server thread should join");
+    }
+
+    #[test]
+    fn openai_provider_maps_rate_limit_error_end_to_end() {
+        let (endpoint, _requests, handle) = spawn_mock_server(vec![MockResponse {
+            status: 429,
+            body: "{\"error\":{\"message\":\"rate limit\"}}".to_owned(),
+        }]);
+
+        let err = with_env_var("MEOW_TEST_OPENAI_KEY_RATE", "dummy-openai-key", || {
+            let provider = HttpProvider::new(
+                ProviderKind::OpenAi,
+                ProviderConfig {
+                    model: "gpt-4.1".to_owned(),
+                    endpoint: Some(endpoint),
+                    api_key_env: Some("MEOW_TEST_OPENAI_KEY_RATE".to_owned()),
+                    timeout_secs: 2,
+                },
+                0,
+            );
+            provider
+                .complete("hello")
+                .expect_err("rate-limit error should bubble from provider")
+                .to_string()
+        });
+
+        assert!(err.contains("kind=rate_limit"));
+        handle.join().expect("mock server thread should join");
+    }
+
+    #[test]
+    fn openai_provider_maps_timeout_error_end_to_end() {
+        let (endpoint, _requests, handle) = spawn_hanging_server(Duration::from_millis(1600));
+
+        let err = with_env_var("MEOW_TEST_OPENAI_KEY_TIMEOUT", "dummy-openai-key", || {
+            let provider = HttpProvider::new(
+                ProviderKind::OpenAi,
+                ProviderConfig {
+                    model: "gpt-4.1".to_owned(),
+                    endpoint: Some(endpoint),
+                    api_key_env: Some("MEOW_TEST_OPENAI_KEY_TIMEOUT".to_owned()),
+                    timeout_secs: 1,
+                },
+                0,
+            );
+            provider
+                .complete("hello")
+                .expect_err("timeout error should bubble from provider")
+                .to_string()
+        });
+
+        assert!(err.contains("kind=timeout"));
+        handle.join().expect("mock server thread should join");
+    }
+
     struct MockResponse {
         status: u16,
         body: String,
     }
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn spawn_mock_server(
         responses: Vec<MockResponse>,
@@ -675,6 +824,47 @@ mod tests {
         });
 
         (format!("http://{addr}"), rx, handle)
+    }
+
+    fn spawn_hanging_server(
+        hold_for: Duration,
+    ) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind hanging mock server");
+        let addr = listener.local_addr().expect("resolve hanging mock address");
+        let (tx, rx) = mpsc::channel();
+
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept hanging connection");
+
+            let mut buf = [0_u8; 16 * 1024];
+            let read = stream.read(&mut buf).expect("read hanging request bytes");
+            let request = String::from_utf8_lossy(&buf[..read]).to_string();
+            tx.send(request).expect("send hanging captured request");
+
+            thread::sleep(hold_for);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            );
+            let _ = stream.flush();
+        });
+
+        (format!("http://{addr}"), rx, handle)
+    }
+
+    fn with_env_var<T, F>(key: &str, value: &str, f: F) -> T
+    where
+        F: FnOnce() -> T,
+    {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        // Rust 2024 marks environment mutation as unsafe because it is process-global.
+        unsafe {
+            env::set_var(key, value);
+        }
+        let output = f();
+        unsafe {
+            env::remove_var(key);
+        }
+        output
     }
 
     fn reason_phrase(status: u16) -> &'static str {
