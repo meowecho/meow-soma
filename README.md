@@ -96,7 +96,16 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 ### Reference Files
 
 - Runtime config template: `config/meow.example.toml`
+- Local dev config (state in repo): `config/dev.local.toml`
 - Master plan: `docs/MEOWSOMA_MASTER_PLAN.md`
 - Detailed phase plan: `docs/PHASE_IMPLEMENTATION_PLAN.md`
 - Config responsibilities: `docs/CONFIG.md`
 - Contributor/agent collaboration guide: `AGENTS.md`
+
+### Local-Only Dev Testing (No `~/.meow-soma`)
+
+Use the local config to keep all state inside this repo:
+
+- `cargo run -- --config config/dev.local.toml config validate`
+- `cargo run -- --config config/dev.local.toml session list`
+- `cargo run -- --config config/dev.local.toml ask "hello"`
