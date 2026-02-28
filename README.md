@@ -109,3 +109,13 @@ Use the local config to keep all state inside this repo:
 - `cargo run -- --config config/dev.local.toml config validate`
 - `cargo run -- --config config/dev.local.toml session list`
 - `cargo run -- --config config/dev.local.toml ask "hello"`
+
+### TUI Controls (Claude-Style Flow)
+
+- Start TUI: `cargo run -- --config config/dev.local.toml`
+- Send: `Enter`
+- Exit: `Esc`, `Ctrl+C`, `/quit`
+- Slash commands: `/help`, `/home`, `/clear`, `/session`, `/provider`, `/profile <name>`, `/new [title]`
+- History: `Up` / `Down`
+- Scroll transcript: `PgUp` / `PgDn`, `Home`, `End`
+- Clear input/transcript: `Ctrl+U` / `Ctrl+L`
