@@ -5,10 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Local;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -29,6 +26,8 @@ const THEME_MUTED: Color = Color::Rgb(130, 138, 150);
 const THEME_OK: Color = Color::Rgb(130, 198, 160);
 const THEME_WARN: Color = Color::Rgb(220, 192, 120);
 const THEME_ERROR: Color = Color::Rgb(224, 130, 138);
+const MAX_DASHBOARD_HEIGHT_COMPACT: u16 = 22;
+const MAX_DASHBOARD_HEIGHT_EXPANDED: u16 = 34;
 
 pub fn run_tui(
     state: &StateStore,
@@ -42,9 +41,8 @@ pub fn run_tui(
 
     let mut ui = TuiState::new(session_id.clone(), profile_name.to_owned(), provider);
 
-    let mut stdout = io::stdout();
+    let stdout = io::stdout();
     enable_raw_mode().context("failed to enable raw mode")?;
-    execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to initialize terminal backend")?;
@@ -187,8 +185,6 @@ fn submit_prompt(
         return handle_slash_command(ui, state, &prompt);
     }
 
-    ui.set_chat_mode();
-
     let context_messages = load_bounded_context(state, &ui.session_id, context_window)?;
     let runtime_context = RuntimeExecutionContext::new(
         RuntimeOperation::Chat,
@@ -251,7 +247,6 @@ fn handle_slash_command(ui: &mut TuiState, state: &StateStore, prompt: &str) -> 
             Ok(false)
         }
         "home" => {
-            ui.set_home_mode();
             ui.status = "home dashboard".to_owned();
             ui.push_activity("command", "/home".to_owned());
             Ok(false)
@@ -260,7 +255,6 @@ fn handle_slash_command(ui: &mut TuiState, state: &StateStore, prompt: &str) -> 
             ui.clear_transcript();
             ui.status = "conversation cleared".to_owned();
             ui.push_activity("command", "/clear".to_owned());
-            ui.set_chat_mode();
             Ok(false)
         }
         "session" => {
@@ -295,7 +289,6 @@ fn handle_slash_command(ui: &mut TuiState, state: &StateStore, prompt: &str) -> 
             ui.clear_transcript();
             ui.status = "new session started".to_owned();
             ui.push_activity("session", "started new session".to_owned());
-            ui.set_home_mode();
             Ok(false)
         }
         _ => {
@@ -332,8 +325,6 @@ fn load_bounded_context(
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode().context("failed to disable raw mode")?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)
-        .context("failed to leave alternate screen")?;
     terminal.show_cursor().context("failed to show cursor")?;
     Ok(())
 }
@@ -351,12 +342,6 @@ struct ActivityEntry {
     content: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScreenMode {
-    Home,
-    Chat,
-}
-
 struct TuiState {
     session_id: String,
     profile: String,
@@ -370,7 +355,6 @@ struct TuiState {
     activity: Vec<ActivityEntry>,
     history: Vec<String>,
     history_cursor: Option<usize>,
-    screen: ScreenMode,
 }
 
 impl TuiState {
@@ -388,16 +372,7 @@ impl TuiState {
             activity: Vec::new(),
             history: Vec::new(),
             history_cursor: None,
-            screen: ScreenMode::Home,
         }
-    }
-
-    fn set_home_mode(&mut self) {
-        self.screen = ScreenMode::Home;
-    }
-
-    fn set_chat_mode(&mut self) {
-        self.screen = ScreenMode::Chat;
     }
 
     fn push_user(&mut self, message: String) {
@@ -523,40 +498,51 @@ impl TuiState {
     }
 
     fn in_home_mode(&self) -> bool {
-        self.screen == ScreenMode::Home
+        self.transcript.is_empty()
     }
 
     fn draw(&self, frame: &mut ratatui::Frame) {
-        if self.in_home_mode() {
-            let hero_height = home_hero_height(frame.area().height);
-            let home = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(hero_height),
-                    Constraint::Length(3),
-                    Constraint::Length(1),
-                    Constraint::Min(1),
-                ])
-                .split(frame.area());
-
-            self.draw_home(frame, home[0]);
-            self.draw_input(frame, home[1]);
-            self.draw_footer(frame, home[2]);
-            self.draw_idle_space(frame, home[3]);
+        let viewport = frame.area();
+        let max_height = viewport.height.min(if self.transcript.is_empty() {
+            MAX_DASHBOARD_HEIGHT_COMPACT
         } else {
-            let outer = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(10),
-                    Constraint::Length(3),
-                    Constraint::Length(1),
-                ])
-                .split(frame.area());
+            MAX_DASHBOARD_HEIGHT_EXPANDED
+        });
+        let hero_height = home_hero_height(max_height);
+        let max_feed_rows = max_height.saturating_sub(hero_height + 4).max(1);
+        let feed_rows = self.desired_feed_rows(max_feed_rows);
+        let root_height = hero_height + feed_rows + 4;
 
-            self.draw_chat_workspace(frame, outer[0]);
-            self.draw_input(frame, outer[1]);
-            self.draw_footer(frame, outer[2]);
+        let root = Rect {
+            x: viewport.x,
+            y: viewport.y,
+            width: viewport.width,
+            height: root_height.min(max_height),
+        };
+
+        let home = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(hero_height),
+                Constraint::Length(feed_rows),
+                Constraint::Length(3),
+                Constraint::Length(1),
+            ])
+            .split(root);
+
+        self.draw_home(frame, home[0]);
+        self.draw_conversation_feed(frame, home[1]);
+        self.draw_input(frame, home[2]);
+        self.draw_footer(frame, home[3]);
+    }
+
+    fn desired_feed_rows(&self, max_rows: u16) -> u16 {
+        if self.transcript.is_empty() {
+            return 1.min(max_rows.max(1));
         }
+
+        let desired = self.transcript.len().max(2).min(max_rows as usize);
+        desired as u16
     }
 
     fn draw_home(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -670,10 +656,7 @@ impl TuiState {
             )));
         } else {
             for item in recent.iter().rev() {
-                right_lines.push(Line::from(vec![
-                    Span::styled(format!("{} ", item.at), Style::default().fg(THEME_MUTED)),
-                    Span::styled(item.content.clone(), Style::default().fg(THEME_TEXT)),
-                ]));
+                right_lines.push(render_activity(item));
             }
         }
 
@@ -689,56 +672,28 @@ impl TuiState {
         frame.render_widget(right, columns[1]);
     }
 
-    fn draw_chat_workspace(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let shell = panel_block(format!(
-            " Meow Soma · {} · session {} ",
-            self.provider,
-            short_session_id(&self.session_id)
-        ));
-        frame.render_widget(shell.clone(), area);
-        let inner = shell.inner(area);
-
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(inner);
+    fn draw_conversation_feed(&self, frame: &mut ratatui::Frame, area: Rect) {
+        if area.height == 0 {
+            return;
+        }
 
         let lines = self
             .transcript
             .iter()
             .map(render_entry)
             .collect::<Vec<Line>>();
-        let scroll = self.transcript_scroll.min(u16::MAX as usize) as u16;
+        let visible_rows = area.height.max(1) as usize;
+        let max_scroll = lines.len().saturating_sub(visible_rows);
+        let scroll = self
+            .transcript_scroll
+            .min(max_scroll)
+            .min(u16::MAX as usize) as u16;
 
         let conversation = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .title(Span::styled(
-                        " conversation ",
-                        Style::default().fg(THEME_PRIMARY),
-                    ))
-                    .borders(Borders::RIGHT)
-                    .border_style(Style::default().fg(THEME_PRIMARY)),
-            )
             .scroll((scroll, 0))
             .style(Style::default().fg(THEME_TEXT).bg(THEME_BG))
             .wrap(Wrap { trim: false });
-        frame.render_widget(conversation, columns[0]);
-
-        let activity = Paragraph::new(
-            self.activity
-                .iter()
-                .map(render_activity)
-                .collect::<Vec<_>>(),
-        )
-        .block(Block::default().title(Span::styled(
-            " activity ",
-            Style::default().fg(THEME_PRIMARY),
-        )))
-        .scroll((self.activity.len().saturating_sub(14) as u16, 0))
-        .style(Style::default().fg(THEME_TEXT).bg(THEME_BG))
-        .wrap(Wrap { trim: false });
-        frame.render_widget(activity, columns[1]);
+        frame.render_widget(conversation, area);
     }
 
     fn draw_input(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -786,10 +741,10 @@ impl TuiState {
         .style(Style::default().bg(THEME_BG));
         frame.render_widget(left, columns[0]);
 
-        let right_text = if self.in_home_mode() {
-            "Update available! Run: meow self-update (soon)".to_owned()
-        } else {
+        let right_text = if self.status.contains("error") || self.status.contains("thinking") {
             self.status.clone()
+        } else {
+            "Update available! Run: meow self-update (soon)".to_owned()
         };
 
         let right = Paragraph::new(Line::from(vec![Span::styled(
@@ -799,15 +754,6 @@ impl TuiState {
         .alignment(Alignment::Right)
         .style(Style::default().bg(THEME_BG));
         frame.render_widget(right, columns[1]);
-    }
-
-    fn draw_idle_space(&self, frame: &mut ratatui::Frame, area: Rect) {
-        if area.height == 0 {
-            return;
-        }
-
-        let idle = Block::default().style(Style::default().bg(THEME_BG));
-        frame.render_widget(idle, area);
     }
 }
 
@@ -923,10 +869,6 @@ fn truncate_middle(input: &str, max_chars: usize) -> String {
         .collect::<String>();
 
     format!("{left}...{right}")
-}
-
-fn short_session_id(session_id: &str) -> String {
-    session_id.chars().take(8).collect()
 }
 
 fn home_hero_height(total_height: u16) -> u16 {
