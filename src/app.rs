@@ -2,9 +2,11 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, mpsc};
+use std::thread;
+use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{
@@ -81,17 +83,40 @@ fn run_chat(
     );
     println!("commands: /exit /quit");
 
-    let stdin = io::stdin();
+    let (tx, rx) = mpsc::channel::<ChatInputEvent>();
+    thread::spawn(move || {
+        let stdin = io::stdin();
+        loop {
+            let mut input = String::new();
+            match stdin.read_line(&mut input) {
+                Ok(0) => {
+                    let _ = tx.send(ChatInputEvent::Eof);
+                    break;
+                }
+                Ok(_) => {
+                    if tx.send(ChatInputEvent::Line(input)).is_err() {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    let _ = tx.send(ChatInputEvent::Error(err.to_string()));
+                    break;
+                }
+            }
+        }
+    });
+
     loop {
         print!("you> ");
         io::stdout().flush()?;
 
-        let mut input = String::new();
-        let read = stdin.read_line(&mut input)?;
-        if read == 0 {
+        let Some(input) = wait_for_chat_input(&rx, cancellation)? else {
             println!();
+            if cancellation.is_cancelled() {
+                println!("chat interrupted by user");
+            }
             break;
-        }
+        };
 
         let prompt = input.trim();
         if prompt.is_empty() {
@@ -119,6 +144,11 @@ fn run_chat(
                 state.add_message(&session_id, "assistant", &response.text)?;
             }
             Err(err) => {
+                if cancellation.is_cancelled() {
+                    println!();
+                    println!("chat interrupted by user");
+                    break;
+                }
                 let message = err.to_string();
                 eprintln!("meow error: {message}");
                 state.add_message(&session_id, "assistant", &format!("[error] {message}"))?;
@@ -485,6 +515,27 @@ fn ensure_storage_dirs(cfg: &config::MeowConfig) -> Result<()> {
     Ok(())
 }
 
+fn wait_for_chat_input(
+    rx: &mpsc::Receiver<ChatInputEvent>,
+    cancellation: &CancellationToken,
+) -> Result<Option<String>> {
+    loop {
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(ChatInputEvent::Line(line)) => return Ok(Some(line)),
+            Ok(ChatInputEvent::Eof) => return Ok(None),
+            Ok(ChatInputEvent::Error(err)) => {
+                return Err(anyhow!("failed to read chat input: {err}"));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+        }
+    }
+}
+
 fn load_bounded_context(
     state: &StateStore,
     session_id: &str,
@@ -554,4 +605,10 @@ struct McpResponse {
     ok: bool,
     output: Option<ToolOutput>,
     error: Option<String>,
+}
+
+enum ChatInputEvent {
+    Line(String),
+    Eof,
+    Error(String),
 }
