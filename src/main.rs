@@ -6,6 +6,7 @@ mod providers;
 mod runtime;
 mod state;
 mod tools;
+mod tui;
 
 use anyhow::Result;
 use clap::Parser;

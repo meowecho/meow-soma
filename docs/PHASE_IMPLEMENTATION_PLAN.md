@@ -21,7 +21,7 @@ Objective:
 
 Completed outputs:
 - Rust package with `meow` binary.
-- Core command surface scaffold (`chat`, `ask`, `run`, `tool`, `mcp`, `session`, `config`).
+- Core command surface scaffold (default `meow` TUI, `ask`, `run`, `tool`, `mcp`, `session`, `config`).
 - Runtime config schema and template.
 - State, tool, policy, and runtime module boundaries.
 - Development multi-agent config under `.codex/`.
@@ -89,7 +89,7 @@ Current status:
   - Add richer profile selection UX (CLI-level profile override) if needed
 
 Scope:
-- Improve prompt pipeline and state handling for `chat`, `ask`, and `run`.
+- Improve prompt pipeline and state handling for TUI chat interactions, `ask`, and `run`.
 - Add deterministic run metadata (run ids, timestamps, status).
 - Add concise user-facing errors and troubleshooting hints.
 
@@ -106,7 +106,7 @@ Deliverables:
 - Tests for context window behavior and cancellation paths.
 
 Definition of done:
-- Repeated `chat` interactions preserve context reliably.
+- Repeated TUI chat interactions preserve context reliably.
 - `run` outputs consistent status and summary fields.
 - Runtime errors are mapped to clear user messages.
 
@@ -120,6 +120,17 @@ Verification commands:
 Objective:
 - Deliver an agentic terminal interface that feels like Claude Code/Codex workflows while keeping single-agent runtime architecture.
 
+Current status:
+- Baseline implemented:
+  - `meow` full-screen terminal mode scaffold
+  - Transcript/input/status panes
+  - Chat submission flow wired to runtime with session persistence
+  - Exit controls (`Esc`, `Ctrl+C`, `/quit`)
+- Remaining work:
+  - Streaming token rendering
+  - Inline approval prompts in TUI
+  - Rich keybindings (history/search/palette)
+
 Scope:
 - Add full-screen TUI mode for interactive usage.
 - Add streaming assistant output in terminal.
@@ -127,9 +138,9 @@ Scope:
 - Add session/status panels that keep users inside one continuous workflow.
 
 Implementation tasks:
-1. Add `meow tui` command and event loop using terminal UI primitives.
+1. Add default `meow` TUI entrypoint and event loop using terminal UI primitives.
 2. Implement panes: transcript, input, status, and tool timeline.
-3. Implement token streaming rendering path in chat/run flows.
+3. Implement token streaming rendering path in TUI/run flows.
 4. Add inline approval interactions tied to permission gate decisions.
 5. Add slash commands in TUI (`/help`, `/provider`, `/model`, `/session`, `/clear`).
 6. Add keyboard controls for history, scrolling, and command palette behavior.
@@ -137,12 +148,12 @@ Implementation tasks:
 
 Deliverables:
 - TUI runtime module(s) and command wiring in CLI/app layers.
-- Streaming output path shared by `chat` and TUI mode.
+- Streaming output path for TUI mode and non-TUI request flows.
 - Inline approval UX connected to policy engine.
 - User docs for TUI controls and troubleshooting.
 
 Definition of done:
-- `meow tui` runs as a stable full-screen interface.
+- `meow` runs as a stable full-screen interface.
 - User can chat, run tasks, approve/reject risky actions, and inspect timeline in one screen.
 - Streaming output is visible token-by-token without waiting for full completion.
 - Terminal state is restored correctly after exit or panic.
@@ -151,7 +162,7 @@ Verification commands:
 - `cargo fmt --check`
 - `cargo check`
 - `cargo test tui`
-- Manual smoke: `meow tui` + provider call + one approval flow
+- Manual smoke: `meow` + provider call + one approval flow
 
 ## Phase 3 - Tool Safety and Execution Hardening
 
@@ -263,7 +274,7 @@ Scope:
 - Add smoke tests for CLI command paths.
 
 Implementation tasks:
-1. Add command-level tests for `chat`, `ask`, `run`, `tool`, `mcp`, `session`, `config`.
+1. Add command-level tests for default `meow` TUI, `ask`, `run`, `tool`, `mcp`, `session`, `config`.
 2. Add fixture-based tests for config validation and policy behavior.
 3. Add CI workflow with fmt, clippy, check, and test gates.
 4. Add failure triage templates and retry strategy for flaky tests.

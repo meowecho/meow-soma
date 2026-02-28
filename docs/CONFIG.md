@@ -3,7 +3,7 @@
 ## 1) Runtime Config (Meow)
 - Canonical path: `~/.meow-soma/config.toml`
 - Owned by end users of `meow`
-- Used at runtime by CLI commands (`chat`, `ask`, `run`, `tool`, `mcp`, `session`)
+- Used at runtime by CLI commands (`ask`, `run`, `tool`, `mcp`, `session`, and default `meow` TUI mode)
 
 Main sections:
 - `[project]`
@@ -32,7 +32,7 @@ Retry and timeout:
 - `runtime.retry_budget` controls provider retry attempts for retryable failures
 - `providers.<name>.timeout_secs` controls HTTP request timeout per attempt
 - Retryable errors include timeout, rate-limit, and most server-side failures
-- `runtime.max_steps` is used as the bounded recent-context window size for chat/run prompt context loading
+- `runtime.max_steps` is used as the bounded recent-context window size for TUI chat/run prompt context loading
 
 ## 2) Development Config (Codex CLI)
 - Path in repo: `.codex/config.toml`

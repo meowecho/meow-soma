@@ -79,7 +79,7 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 
 ### Command Surface
 
-- `meow chat`
+- `meow` (default: start full-screen TUI)
 - `meow ask "<prompt>"`
 - `meow run "<goal>"`
 - `meow tool list`

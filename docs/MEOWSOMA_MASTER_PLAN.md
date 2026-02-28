@@ -35,7 +35,7 @@ Multi-agent is used only for development workflow via Codex CLI config.
 - `src/state.rs`: SQLite state/audit persistence
 
 ## Runtime Commands
-- `meow chat`
+- `meow` (default: full-screen TUI)
 - `meow ask "<prompt>"`
 - `meow run "<goal>"`
 - `meow tool list|exec`
@@ -59,7 +59,7 @@ Multi-agent is used only for development workflow via Codex CLI config.
 - Run history persistence
 
 4. Claude Code/Codex-Style TUI
-- Full-screen terminal UI (`meow tui`)
+- Full-screen terminal UI (`meow` default mode)
 - Streaming responses and inline approval flows
 - Continuous transcript/status/tool timeline panels
 
@@ -107,6 +107,6 @@ Failure scenarios:
   - Mitigation: provider trait boundary + adapter isolation
 
 ## Immediate Next Steps
-1. Start Phase 2.5 implementation (`meow tui` + streaming + inline approvals)
+1. Start Phase 2.5 implementation (`meow` TUI + streaming + inline approvals)
 2. Expand unit/integration tests for policy + state + CLI flows
 3. Harden tool safety and workspace boundaries (Phase 3)

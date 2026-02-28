@@ -2,31 +2,28 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, mpsc};
-use std::thread;
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{
-    ChatArgs, Cli, Commands, ConfigCommand, ExportFormat, McpCommand, McpServeArgs, SessionCommand,
+    Cli, Commands, ConfigCommand, ExportFormat, McpCommand, McpServeArgs, SessionCommand,
     SessionExportArgs, SessionResumeArgs, ToolCommand, ToolExecArgs,
 };
 use crate::config;
 use crate::policy::PolicyEngine;
 use crate::providers::build_provider;
-use crate::runtime::{
-    CancellationToken, ContextMessage, RuntimeAgent, RuntimeExecutionContext, RuntimeOperation,
-};
+use crate::runtime::{CancellationToken, RuntimeAgent, RuntimeExecutionContext, RuntimeOperation};
 use crate::state::StateStore;
 use crate::tools::{ToolOutput, ToolRegistry};
+use crate::tui;
 
 pub fn run(cli: Cli) -> Result<()> {
     let config_override = cli.config.clone();
 
     match cli.command {
-        Commands::Config { command } => handle_config(command, config_override.as_ref()),
+        Some(Commands::Config { command }) => handle_config(command, config_override.as_ref()),
         command => {
             let cfg = config::load(config_override.as_ref())?;
             config::validate(&cfg)?;
@@ -44,119 +41,30 @@ pub fn run(cli: Cli) -> Result<()> {
             let cancellation = CancellationToken::new(shared_interrupt_flag()?);
 
             match command {
-                Commands::Chat(args) => run_chat(
+                None => tui::run_tui(
                     &state,
                     &runtime,
                     &profile_name,
                     context_window,
                     &cancellation,
-                    args,
                 ),
-                Commands::Ask(args) => {
+                Some(Commands::Ask(args)) => {
                     run_ask(&state, &runtime, &profile_name, &cancellation, &args.prompt)
                 }
-                Commands::Run(args) => {
+                Some(Commands::Run(args)) => {
                     run_goal(&state, &runtime, &profile_name, &cancellation, &args.goal)
                 }
-                Commands::Tool { command } => run_tool_command(&state, &policy, &tools, command),
-                Commands::Mcp { command } => run_mcp_command(&state, &policy, &tools, command),
-                Commands::Session { command } => run_session_command(&state, command),
-                Commands::Config { .. } => unreachable!(),
+                Some(Commands::Tool { command }) => {
+                    run_tool_command(&state, &policy, &tools, command)
+                }
+                Some(Commands::Mcp { command }) => {
+                    run_mcp_command(&state, &policy, &tools, command)
+                }
+                Some(Commands::Session { command }) => run_session_command(&state, command),
+                Some(Commands::Config { .. }) => unreachable!(),
             }
         }
     }
-}
-
-fn run_chat(
-    state: &StateStore,
-    runtime: &RuntimeAgent,
-    profile_name: &str,
-    context_window: usize,
-    cancellation: &CancellationToken,
-    args: ChatArgs,
-) -> Result<()> {
-    let session_id = state.create_session(args.title.as_deref())?;
-    println!(
-        "meow chat started (session: {session_id}, profile: {profile_name}, provider: {}:{}).",
-        runtime.provider_name(),
-        runtime.provider_model()
-    );
-    println!("commands: /exit /quit");
-
-    let (tx, rx) = mpsc::channel::<ChatInputEvent>();
-    thread::spawn(move || {
-        let stdin = io::stdin();
-        loop {
-            let mut input = String::new();
-            match stdin.read_line(&mut input) {
-                Ok(0) => {
-                    let _ = tx.send(ChatInputEvent::Eof);
-                    break;
-                }
-                Ok(_) => {
-                    if tx.send(ChatInputEvent::Line(input)).is_err() {
-                        break;
-                    }
-                }
-                Err(err) => {
-                    let _ = tx.send(ChatInputEvent::Error(err.to_string()));
-                    break;
-                }
-            }
-        }
-    });
-
-    loop {
-        print!("you> ");
-        io::stdout().flush()?;
-
-        let Some(input) = wait_for_chat_input(&rx, cancellation)? else {
-            println!();
-            if cancellation.is_cancelled() {
-                println!("chat interrupted by user");
-            }
-            break;
-        };
-
-        let prompt = input.trim();
-        if prompt.is_empty() {
-            continue;
-        }
-
-        if matches!(prompt, "/exit" | "/quit") {
-            break;
-        }
-
-        let context_messages = load_bounded_context(state, &session_id, context_window)?;
-        let runtime_context = RuntimeExecutionContext::new(
-            RuntimeOperation::Chat,
-            profile_name,
-            Some(session_id.clone()),
-            context_messages,
-        );
-
-        state.add_message(&session_id, "user", prompt)?;
-        cancellation.clear();
-        match runtime.respond_with_context(&runtime_context, prompt, cancellation) {
-            Ok(response) => {
-                println!("meow> {}", response.text);
-                println!("[{} ms]", response.duration_ms);
-                state.add_message(&session_id, "assistant", &response.text)?;
-            }
-            Err(err) => {
-                if cancellation.is_cancelled() {
-                    println!();
-                    println!("chat interrupted by user");
-                    break;
-                }
-                let message = err.to_string();
-                eprintln!("meow error: {message}");
-                state.add_message(&session_id, "assistant", &format!("[error] {message}"))?;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn run_ask(
@@ -515,42 +423,6 @@ fn ensure_storage_dirs(cfg: &config::MeowConfig) -> Result<()> {
     Ok(())
 }
 
-fn wait_for_chat_input(
-    rx: &mpsc::Receiver<ChatInputEvent>,
-    cancellation: &CancellationToken,
-) -> Result<Option<String>> {
-    loop {
-        if cancellation.is_cancelled() {
-            return Ok(None);
-        }
-
-        match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(ChatInputEvent::Line(line)) => return Ok(Some(line)),
-            Ok(ChatInputEvent::Eof) => return Ok(None),
-            Ok(ChatInputEvent::Error(err)) => {
-                return Err(anyhow!("failed to read chat input: {err}"));
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
-        }
-    }
-}
-
-fn load_bounded_context(
-    state: &StateStore,
-    session_id: &str,
-    context_window: usize,
-) -> Result<Vec<ContextMessage>> {
-    let messages = state.get_recent_messages(session_id, context_window)?;
-    Ok(messages
-        .into_iter()
-        .map(|item| ContextMessage {
-            role: item.role,
-            content: item.content,
-        })
-        .collect())
-}
-
 fn truncate_display(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_owned();
@@ -605,10 +477,4 @@ struct McpResponse {
     ok: bool,
     output: Option<ToolOutput>,
     error: Option<String>,
-}
-
-enum ChatInputEvent {
-    Line(String),
-    Eof,
-    Error(String),
 }

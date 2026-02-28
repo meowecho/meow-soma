@@ -15,13 +15,11 @@ pub struct Cli {
     pub config: Option<PathBuf>,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Start an interactive chat session.
-    Chat(ChatArgs),
     /// Ask one question and print one response.
     Ask(AskArgs),
     /// Execute a high-level goal using the single-agent runtime loop.
@@ -46,12 +44,6 @@ pub enum Commands {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-}
-
-#[derive(Debug, Args)]
-pub struct ChatArgs {
-    #[arg(long, help = "Optional title for the new chat session")]
-    pub title: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -152,4 +144,22 @@ pub struct ConfigInitArgs {
 
     #[arg(long, help = "Overwrite existing file")]
     pub force: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn defaults_to_no_subcommand() {
+        let cli = Cli::try_parse_from(["meow"]).expect("parse should succeed");
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn rejects_removed_tui_subcommand() {
+        let err = Cli::try_parse_from(["meow", "tui"]).expect_err("parse should fail");
+        assert_eq!(err.kind(), ErrorKind::InvalidSubcommand);
+    }
 }
