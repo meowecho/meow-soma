@@ -117,6 +117,38 @@ impl StateStore {
         Ok(messages)
     }
 
+    pub fn get_recent_messages(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MessageRecord>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, role, content, created_at FROM messages WHERE session_id = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+
+        let rows = stmt.query_map(params![session_id, limit as i64], |row| {
+            Ok(MessageRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?);
+        }
+
+        messages.reverse();
+        Ok(messages)
+    }
+
     pub fn record_run(&self, goal: &str, output: &str, status: &str) -> Result<String> {
         let run_id = Uuid::new_v4().to_string();
         let now = now_rfc3339();

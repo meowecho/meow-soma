@@ -32,6 +32,7 @@ Retry and timeout:
 - `runtime.retry_budget` controls provider retry attempts for retryable failures
 - `providers.<name>.timeout_secs` controls HTTP request timeout per attempt
 - Retryable errors include timeout, rate-limit, and most server-side failures
+- `runtime.max_steps` is used as the bounded recent-context window size for chat/run prompt context loading
 
 ## 2) Development Config (Codex CLI)
 - Path in repo: `.codex/config.toml`

@@ -1,6 +1,8 @@
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -12,7 +14,9 @@ use crate::cli::{
 use crate::config;
 use crate::policy::PolicyEngine;
 use crate::providers::build_provider;
-use crate::runtime::RuntimeAgent;
+use crate::runtime::{
+    CancellationToken, ContextMessage, RuntimeAgent, RuntimeExecutionContext, RuntimeOperation,
+};
 use crate::state::StateStore;
 use crate::tools::{ToolOutput, ToolRegistry};
 
@@ -33,11 +37,25 @@ pub fn run(cli: Cli) -> Result<()> {
             let policy = PolicyEngine::new(&cfg.security);
             let tools = ToolRegistry::new();
             let runtime = RuntimeAgent::new(build_provider(&cfg));
+            let profile_name = cfg.project.default_profile.clone();
+            let context_window = cfg.runtime.max_steps.max(1) as usize;
+            let cancellation = CancellationToken::new(shared_interrupt_flag()?);
 
             match command {
-                Commands::Chat(args) => run_chat(&state, &runtime, args),
-                Commands::Ask(args) => run_ask(&state, &runtime, &args.prompt),
-                Commands::Run(args) => run_goal(&state, &runtime, &args.goal),
+                Commands::Chat(args) => run_chat(
+                    &state,
+                    &runtime,
+                    &profile_name,
+                    context_window,
+                    &cancellation,
+                    args,
+                ),
+                Commands::Ask(args) => {
+                    run_ask(&state, &runtime, &profile_name, &cancellation, &args.prompt)
+                }
+                Commands::Run(args) => {
+                    run_goal(&state, &runtime, &profile_name, &cancellation, &args.goal)
+                }
                 Commands::Tool { command } => run_tool_command(&state, &policy, &tools, command),
                 Commands::Mcp { command } => run_mcp_command(&state, &policy, &tools, command),
                 Commands::Session { command } => run_session_command(&state, command),
@@ -47,13 +65,21 @@ pub fn run(cli: Cli) -> Result<()> {
     }
 }
 
-fn run_chat(state: &StateStore, runtime: &RuntimeAgent, args: ChatArgs) -> Result<()> {
+fn run_chat(
+    state: &StateStore,
+    runtime: &RuntimeAgent,
+    profile_name: &str,
+    context_window: usize,
+    cancellation: &CancellationToken,
+    args: ChatArgs,
+) -> Result<()> {
     let session_id = state.create_session(args.title.as_deref())?;
     println!(
-        "meow chat started (session: {session_id}, provider: {}:{}). Type /exit to quit.",
+        "meow chat started (session: {session_id}, profile: {profile_name}, provider: {}:{}).",
         runtime.provider_name(),
         runtime.provider_model()
     );
+    println!("commands: /exit /quit");
 
     let stdin = io::stdin();
     loop {
@@ -76,33 +102,99 @@ fn run_chat(state: &StateStore, runtime: &RuntimeAgent, args: ChatArgs) -> Resul
             break;
         }
 
+        let context_messages = load_bounded_context(state, &session_id, context_window)?;
+        let runtime_context = RuntimeExecutionContext::new(
+            RuntimeOperation::Chat,
+            profile_name,
+            Some(session_id.clone()),
+            context_messages,
+        );
+
         state.add_message(&session_id, "user", prompt)?;
-        let reply = runtime.respond(prompt)?;
-        println!("meow> {reply}");
-        state.add_message(&session_id, "assistant", &reply)?;
+        cancellation.clear();
+        match runtime.respond_with_context(&runtime_context, prompt, cancellation) {
+            Ok(response) => {
+                println!("meow> {}", response.text);
+                println!("[{} ms]", response.duration_ms);
+                state.add_message(&session_id, "assistant", &response.text)?;
+            }
+            Err(err) => {
+                let message = err.to_string();
+                eprintln!("meow error: {message}");
+                state.add_message(&session_id, "assistant", &format!("[error] {message}"))?;
+            }
+        }
     }
 
     Ok(())
 }
 
-fn run_ask(state: &StateStore, runtime: &RuntimeAgent, prompt: &str) -> Result<()> {
+fn run_ask(
+    state: &StateStore,
+    runtime: &RuntimeAgent,
+    profile_name: &str,
+    cancellation: &CancellationToken,
+    prompt: &str,
+) -> Result<()> {
     let session_id = state.create_session(Some("ask"))?;
     state.add_message(&session_id, "user", prompt)?;
 
-    let reply = runtime.respond(prompt)?;
-    println!("{reply}");
+    let runtime_context = RuntimeExecutionContext::new(
+        RuntimeOperation::Ask,
+        profile_name,
+        Some(session_id.clone()),
+        Vec::new(),
+    );
 
-    state.add_message(&session_id, "assistant", &reply)?;
+    cancellation.clear();
+    let response = runtime.respond_with_context(&runtime_context, prompt, cancellation)?;
+    println!("{}", response.text);
+    println!(
+        "[meta] profile={} provider={}:{} duration_ms={}",
+        profile_name,
+        runtime.provider_name(),
+        runtime.provider_model(),
+        response.duration_ms
+    );
+
+    state.add_message(&session_id, "assistant", &response.text)?;
     Ok(())
 }
 
-fn run_goal(state: &StateStore, runtime: &RuntimeAgent, goal: &str) -> Result<()> {
-    let output = runtime.run_goal(goal)?;
-    let run_id = state.record_run(goal, &output, "ok")?;
+fn run_goal(
+    state: &StateStore,
+    runtime: &RuntimeAgent,
+    profile_name: &str,
+    cancellation: &CancellationToken,
+    goal: &str,
+) -> Result<()> {
+    let runtime_context =
+        RuntimeExecutionContext::new(RuntimeOperation::Run, profile_name, None, Vec::new());
 
-    println!("run_id: {run_id}");
-    println!("{output}");
-    Ok(())
+    cancellation.clear();
+    match runtime.run_goal_with_context(&runtime_context, goal, cancellation) {
+        Ok(response) => {
+            let run_id = state.record_run(goal, &response.text, "ok")?;
+            println!("run_id      : {run_id}");
+            println!("profile     : {profile_name}");
+            println!(
+                "provider    : {}:{}",
+                runtime.provider_name(),
+                runtime.provider_model()
+            );
+            println!("started_at  : {}", response.started_at);
+            println!("finished_at : {}", response.finished_at);
+            println!("duration_ms : {}", response.duration_ms);
+            println!("status      : ok");
+            println!();
+            println!("{}", response.text);
+            Ok(())
+        }
+        Err(err) => {
+            state.record_run(goal, &err.to_string(), "error")?;
+            Err(err)
+        }
+    }
 }
 
 fn run_tool_command(
@@ -221,11 +313,13 @@ fn run_session_command(state: &StateStore, command: SessionCommand) -> Result<()
                 return Ok(());
             }
 
+            println!("{:<36}  {:<18}  UPDATED_AT", "SESSION_ID", "TITLE");
             for session in sessions {
+                let title = session.title.unwrap_or_else(|| "(untitled)".to_owned());
                 println!(
-                    "{}\t{}\t{}",
+                    "{:<36}  {:<18}  {}",
                     session.id,
-                    session.title.unwrap_or_else(|| "(untitled)".to_owned()),
+                    truncate_display(&title, 18),
                     session.updated_at
                 );
             }
@@ -243,11 +337,11 @@ fn resume_session(state: &StateStore, args: SessionResumeArgs) -> Result<()> {
         return Ok(());
     }
 
-    for message in messages {
-        println!(
-            "[{}] {}: {}",
-            message.created_at, message.role, message.content
-        );
+    println!("session: {}", args.session_id);
+    for (idx, message) in messages.iter().enumerate() {
+        println!();
+        println!("[{idx}] {} | {}", message.role, message.created_at);
+        println!("{}", message.content);
     }
 
     Ok(())
@@ -389,6 +483,59 @@ fn ensure_storage_dirs(cfg: &config::MeowConfig) -> Result<()> {
             .with_context(|| format!("failed to create storage directory: {}", path.display()))?;
     }
     Ok(())
+}
+
+fn load_bounded_context(
+    state: &StateStore,
+    session_id: &str,
+    context_window: usize,
+) -> Result<Vec<ContextMessage>> {
+    let messages = state.get_recent_messages(session_id, context_window)?;
+    Ok(messages
+        .into_iter()
+        .map(|item| ContextMessage {
+            role: item.role,
+            content: item.content,
+        })
+        .collect())
+}
+
+fn truncate_display(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_owned();
+    }
+
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+
+    let mut out = value
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    out.push_str("...");
+    out
+}
+
+fn shared_interrupt_flag() -> Result<Arc<AtomicBool>> {
+    static FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    static HANDLER_INSTALLED: OnceLock<()> = OnceLock::new();
+
+    let flag = FLAG
+        .get_or_init(|| Arc::new(AtomicBool::new(false)))
+        .clone();
+
+    if HANDLER_INSTALLED.get().is_none() {
+        let handler_flag = Arc::clone(&flag);
+        ctrlc::set_handler(move || {
+            handler_flag.store(true, Ordering::SeqCst);
+        })
+        .context("failed to install Ctrl+C handler")?;
+
+        let _ = HANDLER_INSTALLED.set(());
+    }
+
+    Ok(flag)
 }
 
 #[derive(Debug, Deserialize)]

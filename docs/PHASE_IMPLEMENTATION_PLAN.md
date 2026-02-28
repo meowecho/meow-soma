@@ -78,6 +78,16 @@ Verification commands:
 Objective:
 - Make single-agent behavior consistent and predictable for real workflows.
 
+Current status:
+- Baseline implemented:
+  - Runtime execution context model with profile + operation + bounded context messages
+  - Bounded session-context loading for chat interactions
+  - Profile-based prompt templates (`default`, `coding`, `research` behavior modes)
+  - Interrupt handling for long requests (Ctrl+C cancellation path)
+  - Improved `run` and `session` output formatting
+- Remaining hardening:
+  - Add richer profile selection UX (CLI-level profile override) if needed
+
 Scope:
 - Improve prompt pipeline and state handling for `chat`, `ask`, and `run`.
 - Add deterministic run metadata (run ids, timestamps, status).
