@@ -27,7 +27,6 @@ const THEME_OK: Color = Color::Rgb(130, 198, 160);
 const THEME_WARN: Color = Color::Rgb(220, 192, 120);
 const THEME_ERROR: Color = Color::Rgb(224, 130, 138);
 const MAX_DASHBOARD_HEIGHT_COMPACT: u16 = 22;
-const MAX_DASHBOARD_HEIGHT_EXPANDED: u16 = 34;
 
 pub fn run_tui(
     state: &StateStore,
@@ -125,8 +124,14 @@ fn run_loop(
 
                 match key.code {
                     KeyCode::Enter => {
-                        let should_exit =
-                            submit_prompt(ui, state, runtime, context_window, cancellation)?;
+                        let should_exit = submit_prompt(
+                            terminal,
+                            ui,
+                            state,
+                            runtime,
+                            context_window,
+                            cancellation,
+                        )?;
                         if should_exit {
                             break;
                         }
@@ -166,6 +171,7 @@ fn run_loop(
 }
 
 fn submit_prompt(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ui: &mut TuiState,
     state: &StateStore,
     runtime: &RuntimeAgent,
@@ -201,6 +207,9 @@ fn submit_prompt(
     state.add_message(&ui.session_id, "user", &prompt)?;
 
     ui.status = "thinking...".to_owned();
+    terminal
+        .draw(|frame| ui.draw(frame))
+        .context("failed to render thinking state")?;
     cancellation.clear();
 
     match runtime.respond_with_context(&runtime_context, &prompt, cancellation) {
@@ -503,14 +512,14 @@ impl TuiState {
 
     fn draw(&self, frame: &mut ratatui::Frame) {
         let viewport = frame.area();
-        let max_height = viewport.height.min(if self.transcript.is_empty() {
-            MAX_DASHBOARD_HEIGHT_COMPACT
+        let max_height = if self.transcript.is_empty() {
+            viewport.height.min(MAX_DASHBOARD_HEIGHT_COMPACT)
         } else {
-            MAX_DASHBOARD_HEIGHT_EXPANDED
-        });
+            viewport.height
+        };
         let hero_height = home_hero_height(max_height);
         let max_feed_rows = max_height.saturating_sub(hero_height + 4).max(1);
-        let feed_rows = self.desired_feed_rows(max_feed_rows);
+        let feed_rows = self.desired_feed_rows(max_feed_rows, viewport.width);
         let root_height = hero_height + feed_rows + 4;
 
         let root = Rect {
@@ -536,13 +545,28 @@ impl TuiState {
         self.draw_footer(frame, home[3]);
     }
 
-    fn desired_feed_rows(&self, max_rows: u16) -> u16 {
+    fn desired_feed_rows(&self, max_rows: u16, width: u16) -> u16 {
         if self.transcript.is_empty() {
             return 1.min(max_rows.max(1));
         }
 
-        let desired = self.transcript.len().max(2).min(max_rows as usize);
-        desired as u16
+        let total_rows = estimate_visual_line_rows(&self.feed_lines(), width).max(2);
+        total_rows.min(max_rows as usize) as u16
+    }
+
+    fn feed_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = self
+            .transcript
+            .iter()
+            .map(render_entry)
+            .collect::<Vec<Line>>();
+        if should_surface_status_in_feed(&self.status) {
+            lines.push(Line::from(Span::styled(
+                format!("status: {}", self.status),
+                status_style(&self.status),
+            )));
+        }
+        lines
     }
 
     fn draw_home(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -677,17 +701,15 @@ impl TuiState {
             return;
         }
 
-        let lines = self
-            .transcript
-            .iter()
-            .map(render_entry)
-            .collect::<Vec<Line>>();
+        let lines = self.feed_lines();
         let visible_rows = area.height.max(1) as usize;
-        let max_scroll = lines.len().saturating_sub(visible_rows);
-        let scroll = self
-            .transcript_scroll
-            .min(max_scroll)
-            .min(u16::MAX as usize) as u16;
+        let total_visual_rows = estimate_visual_line_rows(&lines, area.width);
+        let max_scroll = total_visual_rows.saturating_sub(visible_rows);
+        let scroll = compute_feed_scroll(
+            self.transcript_scroll,
+            self.transcript_max_scroll(),
+            max_scroll,
+        );
 
         let conversation = Paragraph::new(lines)
             .scroll((scroll, 0))
@@ -741,11 +763,7 @@ impl TuiState {
         .style(Style::default().bg(THEME_BG));
         frame.render_widget(left, columns[0]);
 
-        let right_text = if self.status.contains("error") || self.status.contains("thinking") {
-            self.status.clone()
-        } else {
-            "Update available! Run: meow self-update (soon)".to_owned()
-        };
+        let right_text = "Update available! Run: meow self-update (soon)".to_owned();
 
         let right = Paragraph::new(Line::from(vec![Span::styled(
             right_text.clone(),
@@ -792,6 +810,31 @@ fn status_style(status: &str) -> Style {
     } else {
         Style::default().fg(THEME_OK).add_modifier(Modifier::BOLD)
     }
+}
+
+fn should_surface_status_in_feed(status: &str) -> bool {
+    let normalized = status.trim().to_ascii_lowercase();
+    !normalized.is_empty() && normalized != "ready"
+}
+
+fn compute_feed_scroll(
+    transcript_scroll: usize,
+    transcript_max_scroll: usize,
+    max_scroll: usize,
+) -> u16 {
+    if transcript_scroll >= transcript_max_scroll {
+        max_scroll.min(u16::MAX as usize) as u16
+    } else {
+        transcript_scroll.min(max_scroll).min(u16::MAX as usize) as u16
+    }
+}
+
+fn estimate_visual_line_rows(lines: &[Line<'_>], width: u16) -> usize {
+    let wrap_width = width.max(1) as usize;
+    lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(wrap_width))
+        .sum()
 }
 
 fn render_entry(entry: &TranscriptEntry) -> Line<'static> {
@@ -949,6 +992,49 @@ mod tests {
 
         state.history_next();
         assert_eq!(state.input, "");
+    }
+
+    #[test]
+    fn status_feed_visibility_targets_runtime_states() {
+        assert!(should_surface_status_in_feed("thinking..."));
+        assert!(should_surface_status_in_feed("error"));
+        assert!(should_surface_status_in_feed("interrupted by user"));
+        assert!(should_surface_status_in_feed("ok | 123 ms"));
+        assert!(should_surface_status_in_feed("home dashboard"));
+        assert!(!should_surface_status_in_feed("ready"));
+    }
+
+    #[test]
+    fn desired_feed_rows_reserves_space_for_status_line() {
+        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        state.push("you", "first".to_owned());
+        state.push("meow", "second".to_owned());
+        state.status = "ok | 100 ms".to_owned();
+
+        assert_eq!(state.desired_feed_rows(10, 80), 3);
+    }
+
+    #[test]
+    fn desired_feed_rows_grows_for_wrapped_lines_before_scroll() {
+        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        state.push("you", "this is a long line that wraps".to_owned());
+        state.push("meow", "another long line that wraps".to_owned());
+        state.status = "ok | 100 ms".to_owned();
+
+        assert_eq!(state.desired_feed_rows(20, 10), 10);
+    }
+
+    #[test]
+    fn compute_feed_scroll_follows_latest_when_at_bottom() {
+        assert_eq!(compute_feed_scroll(10, 10, 5), 5);
+        assert_eq!(compute_feed_scroll(3, 10, 5), 3);
+        assert_eq!(compute_feed_scroll(8, 10, 5), 5);
+    }
+
+    #[test]
+    fn estimate_visual_line_rows_accounts_for_wrapping() {
+        let lines = vec![Line::from("12345"), Line::from("123456789"), Line::from("")];
+        assert_eq!(estimate_visual_line_rows(&lines, 5), 4);
     }
 
     #[test]
