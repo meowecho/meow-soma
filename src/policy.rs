@@ -234,6 +234,8 @@ fn is_risky_shell_command(cmd_lower: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
+    use std::path::PathBuf;
 
     fn config(policy: &str) -> SecurityConfig {
         SecurityConfig {
@@ -241,6 +243,77 @@ mod tests {
             allowlist: vec!["git status".to_owned(), "ls".to_owned()],
             denylist: vec!["rm -rf /".to_owned(), "blocked-tool".to_owned()],
         }
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PolicyFixture {
+        security: SecurityConfig,
+        cases: Vec<PolicyFixtureCase>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PolicyFixtureCase {
+        kind: String,
+        input: String,
+        risky: Option<bool>,
+        expected_severity: String,
+        expected_reason_code: String,
+    }
+
+    fn fixture_path(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("policy")
+            .join(name)
+    }
+
+    fn expected_severity(raw: &str) -> PolicySeverity {
+        match raw {
+            "allow" => PolicySeverity::Allow,
+            "approve_required" => PolicySeverity::ApproveRequired,
+            "deny" => PolicySeverity::Deny,
+            value => panic!("unknown fixture severity: {value}"),
+        }
+    }
+
+    fn run_policy_fixture(name: &str) {
+        let path = fixture_path(name);
+        let raw = std::fs::read_to_string(&path).expect("policy fixture should be readable");
+        let fixture: PolicyFixture =
+            toml::from_str(&raw).expect("policy fixture should parse as toml");
+        let engine = PolicyEngine::new(&fixture.security);
+
+        for case in fixture.cases {
+            let decision = match case.kind.as_str() {
+                "shell" => engine.evaluate_shell(&case.input),
+                "tool" => engine.evaluate_tool(&case.input, case.risky.unwrap_or(false)),
+                value => panic!("unknown fixture case kind: {value}"),
+            };
+
+            assert_eq!(
+                decision.severity,
+                expected_severity(&case.expected_severity),
+                "unexpected severity for fixture case: {:?}",
+                case
+            );
+            assert_eq!(
+                decision.reason_code(),
+                case.expected_reason_code,
+                "unexpected reason code for fixture case: {:?}",
+                case
+            );
+        }
+    }
+
+    #[test]
+    fn permission_gate_fixture_cases_pass() {
+        run_policy_fixture("permission_gate.toml");
+    }
+
+    #[test]
+    fn read_only_fixture_cases_pass() {
+        run_policy_fixture("read_only.toml");
     }
 
     #[test]

@@ -179,6 +179,144 @@ mod tests {
     }
 
     #[test]
+    fn parses_global_config_override() {
+        let cli = Cli::try_parse_from(["meow", "--config", "config/dev.local.toml"])
+            .expect("parse should succeed");
+        assert_eq!(cli.config, Some(PathBuf::from("config/dev.local.toml")));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn parses_ask_command() {
+        let cli =
+            Cli::try_parse_from(["meow", "ask", "hello world"]).expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Ask(args) = command else {
+            panic!("expected ask command");
+        };
+
+        assert_eq!(args.prompt, "hello world");
+    }
+
+    #[test]
+    fn parses_run_command() {
+        let cli = Cli::try_parse_from(["meow", "run", "implement phase 6"])
+            .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Run(args) = command else {
+            panic!("expected run command");
+        };
+
+        assert_eq!(args.goal, "implement phase 6");
+    }
+
+    #[test]
+    fn parses_tool_list_command() {
+        let cli = Cli::try_parse_from(["meow", "tool", "list"]).expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Tool { command } = command else {
+            panic!("expected tool command");
+        };
+
+        assert!(matches!(command, ToolCommand::List));
+    }
+
+    #[test]
+    fn parses_tool_exec_command() {
+        let cli = Cli::try_parse_from([
+            "meow",
+            "tool",
+            "exec",
+            "shell",
+            "--approve",
+            "echo",
+            "hello",
+        ])
+        .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Tool { command } = command else {
+            panic!("expected tool command");
+        };
+
+        let ToolCommand::Exec(args) = command else {
+            panic!("expected tool exec command");
+        };
+
+        assert_eq!(args.name, "shell");
+        assert!(args.approve);
+        assert_eq!(args.args, vec!["echo".to_owned(), "hello".to_owned()]);
+    }
+
+    #[test]
+    fn parses_mcp_serve_command_with_transport() {
+        let cli = Cli::try_parse_from(["meow", "mcp", "serve", "--transport", "stdio"])
+            .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Mcp { command } = command else {
+            panic!("expected mcp command");
+        };
+
+        let McpCommand::Serve(args) = command;
+
+        assert_eq!(args.transport, "stdio");
+    }
+
+    #[test]
+    fn parses_config_init_command_with_flags() {
+        let cli = Cli::try_parse_from([
+            "meow",
+            "config",
+            "init",
+            "--output",
+            "/tmp/config.toml",
+            "--force",
+        ])
+        .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Config { command } = command else {
+            panic!("expected config command");
+        };
+
+        let ConfigCommand::Init(args) = command else {
+            panic!("expected config init command");
+        };
+
+        assert_eq!(args.output, Some(PathBuf::from("/tmp/config.toml")));
+        assert!(args.force);
+    }
+
+    #[test]
+    fn parses_config_validate_command() {
+        let cli =
+            Cli::try_parse_from(["meow", "config", "validate"]).expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Config { command } = command else {
+            panic!("expected config command");
+        };
+
+        assert!(matches!(command, ConfigCommand::Validate));
+    }
+
+    #[test]
+    fn parses_config_path_command() {
+        let cli = Cli::try_parse_from(["meow", "config", "path"]).expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Config { command } = command else {
+            panic!("expected config command");
+        };
+
+        assert!(matches!(command, ConfigCommand::Path));
+    }
+
+    #[test]
     fn parses_session_export_single_session_defaults_to_json_in_app() {
         let cli = Cli::try_parse_from(["meow", "session", "export", "session-1"])
             .expect("parse should succeed");
@@ -195,6 +333,35 @@ mod tests {
         assert_eq!(args.session_id.as_deref(), Some("session-1"));
         assert!(!args.all);
         assert!(args.format.is_none());
+    }
+
+    #[test]
+    fn parses_session_list_command() {
+        let cli = Cli::try_parse_from(["meow", "session", "list"]).expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Session { command } = command else {
+            panic!("expected session command");
+        };
+
+        assert!(matches!(command, SessionCommand::List));
+    }
+
+    #[test]
+    fn parses_session_resume_command() {
+        let cli = Cli::try_parse_from(["meow", "session", "resume", "session-1"])
+            .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Session { command } = command else {
+            panic!("expected session command");
+        };
+
+        let SessionCommand::Resume(args) = command else {
+            panic!("expected resume command");
+        };
+
+        assert_eq!(args.session_id, "session-1");
     }
 
     #[test]

@@ -287,6 +287,9 @@ Verification commands:
 Objective:
 - Make regressions hard to introduce and easy to detect.
 
+Current status:
+- Done
+
 Scope:
 - Expand unit/integration coverage across all critical modules.
 - Add CI workflow with strict checks.
@@ -311,6 +314,7 @@ Definition of done:
 Verification commands:
 - `cargo fmt --check`
 - `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo check`
 - `cargo test`
 
 ## Phase 7 - Packaging and Release Readiness

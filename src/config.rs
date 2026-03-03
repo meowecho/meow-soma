@@ -326,3 +326,48 @@ fn resolve_config_path(path_override: Option<&PathBuf>) -> Result<PathBuf> {
         None => canonical_config_path(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_path(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("config")
+            .join(name)
+    }
+
+    #[test]
+    fn valid_fixture_loads_and_validates() {
+        let path = fixture_path("valid.toml");
+        let cfg = load(Some(&path)).expect("fixture config should load");
+        validate(&cfg).expect("fixture config should be valid");
+
+        assert_eq!(cfg.project.name, "fixture-project");
+        assert_eq!(cfg.project.default_profile, "default");
+        assert_eq!(cfg.runtime.default_provider, "ollama");
+    }
+
+    #[test]
+    fn invalid_fixture_reports_validation_errors() {
+        let path = fixture_path("invalid_validation.toml");
+        let cfg = load(Some(&path)).expect("fixture config should load");
+        let err = validate(&cfg).expect_err("validation should fail");
+        let message = err.to_string();
+
+        for expected in [
+            "[project].name must not be empty",
+            "[runtime].max_steps must be > 0",
+            "[runtime].concurrency must be > 0",
+            "[security].approval_policy must be one of: permission_gate, always_allow, read_only",
+            "default profile 'missing-profile' not found in [[profiles]]",
+        ] {
+            assert!(
+                message.contains(expected),
+                "validation error should contain `{expected}`, got: {message}"
+            );
+        }
+    }
+}

@@ -1,0 +1,49 @@
+[security]
+approval_policy = "permission_gate"
+allowlist = ["git status", "ls"]
+denylist = ["rm -rf /", "blocked-tool"]
+
+[[cases]]
+kind = "shell"
+input = "   git    status   "
+expected_severity = "allow"
+expected_reason_code = "tool_allowed"
+
+[[cases]]
+kind = "shell"
+input = "git commit -m \"wip\""
+expected_severity = "approve_required"
+expected_reason_code = "outside_allowlist"
+
+[[cases]]
+kind = "shell"
+input = "rm -rf ./tmp"
+expected_severity = "approve_required"
+expected_reason_code = "risky_shell"
+
+[[cases]]
+kind = "shell"
+input = "echo hi && rm -rf /"
+expected_severity = "deny"
+expected_reason_code = "denylist_match"
+
+[[cases]]
+kind = "tool"
+input = "echo"
+risky = false
+expected_severity = "allow"
+expected_reason_code = "tool_allowed"
+
+[[cases]]
+kind = "tool"
+input = "fs.write"
+risky = true
+expected_severity = "approve_required"
+expected_reason_code = "risky_tool"
+
+[[cases]]
+kind = "tool"
+input = "blocked-tool"
+risky = false
+expected_severity = "deny"
+expected_reason_code = "denylist_match"

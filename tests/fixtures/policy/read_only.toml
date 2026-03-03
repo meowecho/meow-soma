@@ -1,0 +1,30 @@
+[security]
+approval_policy = "read_only"
+allowlist = ["git status", "ls"]
+denylist = ["rm -rf /", "blocked-tool"]
+
+[[cases]]
+kind = "shell"
+input = "ls -la"
+expected_severity = "allow"
+expected_reason_code = "read_only_allowlisted"
+
+[[cases]]
+kind = "shell"
+input = "git commit -m \"x\""
+expected_severity = "deny"
+expected_reason_code = "read_only_blocked"
+
+[[cases]]
+kind = "tool"
+input = "echo"
+risky = false
+expected_severity = "allow"
+expected_reason_code = "tool_allowed"
+
+[[cases]]
+kind = "tool"
+input = "fs.write"
+risky = true
+expected_severity = "deny"
+expected_reason_code = "read_only_blocked"

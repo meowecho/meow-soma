@@ -1,0 +1,37 @@
+[project]
+name = "fixture-project"
+default_profile = "default"
+
+[runtime]
+default_provider = "ollama"
+max_steps = 8
+concurrency = 1
+retry_budget = 1
+
+[security]
+approval_policy = "permission_gate"
+allowlist = ["ls", "pwd", "git status"]
+denylist = ["rm -rf /", "mkfs"]
+
+[storage]
+root_dir = "./tmp/test-fixtures/root"
+sqlite_path = "./tmp/test-fixtures/state.db"
+memory_dir = "./tmp/test-fixtures/memory"
+artifacts_dir = "./tmp/test-fixtures/artifacts"
+logs_dir = "./tmp/test-fixtures/logs"
+
+[mcp]
+enabled = true
+transport = "stdio"
+bind = "127.0.0.1:7777"
+
+[providers.ollama]
+model = "llama3.1:8b"
+endpoint = "http://127.0.0.1:11434"
+timeout_secs = 5
+
+[[profiles]]
+name = "default"
+model = "llama3.1:8b"
+tools = ["shell", "fs.read", "echo"]
+temperature = 0.2

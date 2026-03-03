@@ -412,11 +412,11 @@ impl HttpProvider {
                 ProviderError::parse(format!("invalid Ollama stream event: {err}"))
             })?;
 
-            if let Some(chunk) = parse_ollama_stream_chunk(&value) {
-                if !chunk.is_empty() {
-                    on_chunk(&chunk).map_err(classify_callback_error)?;
-                    out.push_str(&chunk);
-                }
+            if let Some(chunk) = parse_ollama_stream_chunk(&value)
+                && !chunk.is_empty()
+            {
+                on_chunk(&chunk).map_err(classify_callback_error)?;
+                out.push_str(&chunk);
             }
 
             if value.get("done").and_then(Value::as_bool) == Some(true) {
@@ -735,11 +735,11 @@ where
             break;
         }
 
-        if let Some(chunk) = parse_event(payload)? {
-            if !chunk.is_empty() {
-                on_chunk(&chunk).map_err(classify_callback_error)?;
-                out.push_str(&chunk);
-            }
+        if let Some(chunk) = parse_event(payload)?
+            && !chunk.is_empty()
+        {
+            on_chunk(&chunk).map_err(classify_callback_error)?;
+            out.push_str(&chunk);
         }
     }
 
@@ -838,10 +838,10 @@ fn parse_anthropic_stream_delta(value: &Value) -> Option<String> {
         return Some(text.to_owned());
     }
 
-    if let Some(text) = value.pointer("/content_block/text").and_then(Value::as_str) {
-        if !text.is_empty() {
-            return Some(text.to_owned());
-        }
+    if let Some(text) = value.pointer("/content_block/text").and_then(Value::as_str)
+        && !text.is_empty()
+    {
+        return Some(text.to_owned());
     }
 
     None

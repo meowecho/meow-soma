@@ -224,16 +224,16 @@ fn parse_request(line: &str, line_no: u64) -> std::result::Result<ParsedRequest,
     })?;
     let request_id = fallback_request_id(id.as_deref(), line_no);
 
-    if let Some(version) = raw.get("version").and_then(Value::as_str) {
-        if version != MCP_PROTOCOL_VERSION {
-            return Err((
-                id,
-                request_id,
-                "parse".to_owned(),
-                McpErrorCode::UnsupportedVersion,
-                format!("unsupported version '{version}', expected '{MCP_PROTOCOL_VERSION}'"),
-            ));
-        }
+    if let Some(version) = raw.get("version").and_then(Value::as_str)
+        && version != MCP_PROTOCOL_VERSION
+    {
+        return Err((
+            id,
+            request_id,
+            "parse".to_owned(),
+            McpErrorCode::UnsupportedVersion,
+            format!("unsupported version '{version}', expected '{MCP_PROTOCOL_VERSION}'"),
+        ));
     }
 
     if let Some(method) = raw.get("method").and_then(Value::as_str) {

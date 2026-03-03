@@ -72,16 +72,14 @@ pub fn run_tui(
     );
 
     let restore_result = restore_terminal(&mut terminal);
-
-    if let Err(err) = restore_result {
-        return Err(err);
-    }
+    restore_result?;
 
     run_result?;
     println!("meow closed (session: {})", ui.session_id);
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ui: &mut TuiState,
@@ -222,6 +220,7 @@ fn run_loop(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn submit_prompt(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ui: &mut TuiState,
@@ -1085,7 +1084,7 @@ impl TuiState {
 
     fn desired_feed_rows(&self, max_rows: u16, width: u16) -> u16 {
         if self.transcript.is_empty() {
-            return 1.min(max_rows.max(1));
+            return 1;
         }
 
         let total_rows = estimate_visual_line_rows(&self.feed_lines(), width).max(2);
@@ -1178,41 +1177,42 @@ impl TuiState {
         .wrap(Wrap { trim: false });
         frame.render_widget(meta, left_parts[2]);
 
-        let mut right_lines = Vec::new();
-        right_lines.push(Line::from(Span::styled(
-            "Tips for getting started",
-            Style::default()
-                .fg(THEME_PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        )));
-        right_lines.push(Line::from(Span::styled(
-            "Run /help to view shortcuts",
-            Style::default().fg(THEME_MUTED),
-        )));
-        right_lines.push(Line::from(Span::styled(
-            "Press Enter to start chatting",
-            Style::default().fg(THEME_MUTED),
-        )));
-        right_lines.push(Line::from(Span::styled(
-            "Use /new to reset the session",
-            Style::default().fg(THEME_MUTED),
-        )));
-        right_lines.push(Line::from(Span::styled(
-            "Ctrl+R history search · Ctrl+P palette",
-            Style::default().fg(THEME_MUTED),
-        )));
-        right_lines.push(Line::default());
-        right_lines.push(Line::from(Span::styled(
-            "----------------------------",
-            Style::default().fg(THEME_PRIMARY),
-        )));
-        right_lines.push(Line::from(Span::styled(
-            "Recent activity",
-            Style::default()
-                .fg(THEME_PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        )));
-        right_lines.push(Line::default());
+        let mut right_lines = vec![
+            Line::from(Span::styled(
+                "Tips for getting started",
+                Style::default()
+                    .fg(THEME_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "Run /help to view shortcuts",
+                Style::default().fg(THEME_MUTED),
+            )),
+            Line::from(Span::styled(
+                "Press Enter to start chatting",
+                Style::default().fg(THEME_MUTED),
+            )),
+            Line::from(Span::styled(
+                "Use /new to reset the session",
+                Style::default().fg(THEME_MUTED),
+            )),
+            Line::from(Span::styled(
+                "Ctrl+R history search · Ctrl+P palette",
+                Style::default().fg(THEME_MUTED),
+            )),
+            Line::default(),
+            Line::from(Span::styled(
+                "----------------------------",
+                Style::default().fg(THEME_PRIMARY),
+            )),
+            Line::from(Span::styled(
+                "Recent activity",
+                Style::default()
+                    .fg(THEME_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::default(),
+        ];
 
         let recent = self.activity.iter().rev().take(4).collect::<Vec<_>>();
         if recent.is_empty() {
@@ -1325,7 +1325,7 @@ impl TuiState {
         let width = (root.width.saturating_mul(70) / 100)
             .max(48)
             .min(root.width);
-        let height = root.height.min(14).max(8);
+        let height = root.height.clamp(8, 14);
         let x = root.x + root.width.saturating_sub(width) / 2;
         let y = root.y + root.height.saturating_sub(height) / 2;
         let area = Rect {

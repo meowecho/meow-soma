@@ -1,0 +1,98 @@
+name: Test Failure Triage
+description: Report a failing or flaky test with reproducible context.
+title: "test: <failing test name>"
+labels:
+  - test
+  - triage
+body:
+  - type: input
+    id: failing_test
+    attributes:
+      label: Failing test name
+      description: Exact test function/path that failed.
+      placeholder: "providers::tests::openai_provider_success_with_mock_response"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - parser
+        - config
+        - policy
+        - runtime
+        - tools
+        - state
+        - provider
+        - mcp
+        - tui
+        - ci
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: Repro command
+      description: Exact command used to reproduce.
+      placeholder: "cargo test providers::tests::openai_provider_success_with_mock_response -- --exact --nocapture"
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed output
+      description: Error output, panic, or CI log excerpt.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead.
+    validations:
+      required: true
+
+  - type: input
+    id: first_bad_change
+    attributes:
+      label: First bad change (if known)
+      description: Commit SHA or PR number where this started.
+      placeholder: "e351173 or #123"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: flake
+    attributes:
+      label: Is this flaky?
+      options:
+        - "unknown"
+        - "yes"
+        - "no"
+    validations:
+      required: true
+
+  - type: textarea
+    id: retry_summary
+    attributes:
+      label: Retry summary
+      description: Include retries attempted and outcomes.
+      value: |
+        1) Re-run exact test:
+        2) Re-run suite:
+        3) Outcome:
+    validations:
+      required: true
+
+  - type: textarea
+    id: follow_up
+    attributes:
+      label: Follow-up action
+      description: fix now | open issue | needs investigation.
+    validations:
+      required: true
