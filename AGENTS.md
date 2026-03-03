@@ -29,6 +29,22 @@ It is the source of truth for development workflow, role boundaries, and quality
 
 Role responsibilities are configured in `.codex/config.toml` and `.codex/agents/*.toml`.
 
+## Agent Selection Policy (Default)
+
+Use agents defined in `.codex/` based on task type by default:
+- Planning and acceptance criteria -> `planner`
+- Repository/docs/API context gathering -> `researcher`
+- Code implementation and refactor work -> `coder`
+- Risk, regression, and test-gap review -> `reviewer`
+- Build/test/release/ops execution -> `operator`
+- Cross-task coordination and output merge -> `orchestrator`
+
+Operational rules:
+- Start with `orchestrator` only when a task needs decomposition or multi-step coordination.
+- For direct coding tasks, route to `coder` first and then `reviewer` before merge.
+- Use the minimal set of agents needed for a task; avoid unnecessary fan-out.
+- If routing is ambiguous, prefer `planner` for scoping, then hand off to the execution role.
+
 ## Scope Guardrails
 
 - Do not re-introduce runtime multi-agent cowork in MVP or v1 unless explicitly approved.
