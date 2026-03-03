@@ -252,6 +252,9 @@ Verification commands:
 Objective:
 - Make local state durable, queryable, and migration-safe.
 
+Current status:
+- Done
+
 Scope:
 - Add schema versioning and migration framework.
 - Improve indexing and query performance for sessions/tool history.

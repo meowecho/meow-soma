@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::cli::{
     Cli, Commands, ConfigCommand, ExportFormat, McpCommand, SessionCommand, SessionExportArgs,
-    SessionResumeArgs, ToolCommand, ToolExecArgs,
+    SessionImportArgs, SessionResumeArgs, ToolCommand, ToolExecArgs,
 };
 use crate::config;
 use crate::mcp;
@@ -200,6 +200,7 @@ fn run_session_command(state: &StateStore, command: SessionCommand) -> Result<()
         }
         SessionCommand::Resume(args) => resume_session(state, args),
         SessionCommand::Export(args) => export_session(state, args),
+        SessionCommand::Import(args) => import_session(state, args),
     }
 }
 
@@ -221,23 +222,62 @@ fn resume_session(state: &StateStore, args: SessionResumeArgs) -> Result<()> {
 }
 
 fn export_session(state: &StateStore, args: SessionExportArgs) -> Result<()> {
-    let messages = state.get_messages(&args.session_id)?;
-    if messages.is_empty() {
-        bail!("session {} has no messages", args.session_id);
-    }
+    validate_session_export_args(&args)?;
 
-    let rendered = match args.format {
-        ExportFormat::Json => serde_json::to_string_pretty(&messages)?,
-        ExportFormat::Markdown => render_markdown_session(&args.session_id, &messages),
+    let rendered = if args.all {
+        state.export_snapshot_json()?
+    } else {
+        let session_id = args
+            .session_id
+            .as_deref()
+            .context("missing session id; provide SESSION_ID or --all")?;
+        let messages = state.get_messages(session_id)?;
+        if messages.is_empty() {
+            bail!("session {} has no messages", session_id);
+        }
+
+        match args.format.unwrap_or(ExportFormat::Json) {
+            ExportFormat::Json => serde_json::to_string_pretty(&messages)?,
+            ExportFormat::Markdown => render_markdown_session(session_id, &messages),
+        }
     };
 
     if let Some(path) = args.output {
         write_text_file(&path, &rendered)?;
-        println!("exported session to {}", path.display());
+        if args.all {
+            println!("exported backup snapshot to {}", path.display());
+        } else {
+            println!("exported session to {}", path.display());
+        }
     } else {
         println!("{rendered}");
     }
 
+    Ok(())
+}
+
+fn import_session(state: &StateStore, args: SessionImportArgs) -> Result<()> {
+    let payload = fs::read_to_string(&args.input)
+        .with_context(|| format!("failed reading backup file: {}", args.input.display()))?;
+    state.import_snapshot_json(&payload)?;
+    println!("imported backup snapshot from {}", args.input.display());
+    Ok(())
+}
+
+fn validate_session_export_args(args: &SessionExportArgs) -> Result<()> {
+    if args.all {
+        if args.session_id.is_some() {
+            bail!("--all cannot be combined with SESSION_ID");
+        }
+        if matches!(args.format, Some(ExportFormat::Markdown)) {
+            bail!("--all only supports JSON backup export");
+        }
+        return Ok(());
+    }
+
+    if args.session_id.is_none() {
+        bail!("missing session id; provide SESSION_ID or --all");
+    }
     Ok(())
 }
 
@@ -412,4 +452,129 @@ fn shared_interrupt_flag() -> Result<Arc<AtomicBool>> {
     }
 
     Ok(flag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::StateSnapshot;
+    use uuid::Uuid;
+
+    fn temp_db_path(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{prefix}-{}.db", Uuid::new_v4()))
+    }
+
+    fn temp_output_path(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{prefix}-{}.tmp", Uuid::new_v4()))
+    }
+
+    #[test]
+    fn validate_export_args_rejects_markdown_for_all() {
+        let args = SessionExportArgs {
+            session_id: None,
+            all: true,
+            format: Some(ExportFormat::Markdown),
+            output: None,
+        };
+
+        let err = validate_session_export_args(&args).expect_err("validation should fail");
+        assert!(err.to_string().contains("only supports JSON"));
+    }
+
+    #[test]
+    fn export_session_markdown_writes_markdown_for_single_session() {
+        let db_path = temp_db_path("meow-app-export-md");
+        let out_path = temp_output_path("meow-app-export-md");
+        let state = StateStore::open(&db_path).expect("state store should open");
+
+        let session_id = state
+            .create_session(Some("md"))
+            .expect("session should be created");
+        state
+            .add_message(&session_id, "user", "hello markdown")
+            .expect("message should be added");
+
+        export_session(
+            &state,
+            SessionExportArgs {
+                session_id: Some(session_id.clone()),
+                all: false,
+                format: Some(ExportFormat::Markdown),
+                output: Some(out_path.clone()),
+            },
+        )
+        .expect("export should succeed");
+
+        let content = fs::read_to_string(&out_path).expect("exported file should be readable");
+        assert!(content.contains(&format!("# Session {session_id}")));
+        assert!(content.contains("hello markdown"));
+    }
+
+    #[test]
+    fn export_session_all_writes_snapshot_json() {
+        let db_path = temp_db_path("meow-app-export-all");
+        let out_path = temp_output_path("meow-app-export-all");
+        let state = StateStore::open(&db_path).expect("state store should open");
+
+        let session_id = state
+            .create_session(Some("all"))
+            .expect("session should be created");
+        state
+            .add_message(&session_id, "user", "hello backup")
+            .expect("message should be added");
+
+        export_session(
+            &state,
+            SessionExportArgs {
+                session_id: None,
+                all: true,
+                format: None,
+                output: Some(out_path.clone()),
+            },
+        )
+        .expect("export should succeed");
+
+        let payload = fs::read_to_string(&out_path).expect("snapshot should be readable");
+        let snapshot: StateSnapshot =
+            serde_json::from_str(&payload).expect("snapshot json should parse");
+        assert!(!snapshot.sessions.is_empty());
+        assert!(!snapshot.messages.is_empty());
+    }
+
+    #[test]
+    fn import_session_restores_from_json_file() {
+        let source_db = temp_db_path("meow-app-import-src");
+        let target_db = temp_db_path("meow-app-import-dst");
+        let backup_path = temp_output_path("meow-app-import-json");
+
+        let source = StateStore::open(&source_db).expect("source state should open");
+        let session_id = source
+            .create_session(Some("src"))
+            .expect("session should be created");
+        source
+            .add_message(&session_id, "user", "snapshot body")
+            .expect("message should be added");
+
+        let payload = source
+            .export_snapshot_json()
+            .expect("snapshot should export to json");
+        fs::write(&backup_path, payload).expect("backup file should be written");
+
+        let target = StateStore::open(&target_db).expect("target state should open");
+        import_session(
+            &target,
+            SessionImportArgs {
+                input: backup_path.clone(),
+            },
+        )
+        .expect("import should succeed");
+
+        let sessions = target.list_sessions().expect("sessions should load");
+        assert_eq!(sessions.len(), 1);
+        let messages = target
+            .get_messages(&sessions[0].id)
+            .expect("messages should load");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "snapshot body");
+    }
 }

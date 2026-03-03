@@ -85,7 +85,7 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 - `meow tool list`
 - `meow tool exec <tool> ... [--approve]`
 - `meow mcp serve --transport stdio`
-- `meow session list|resume|export`
+- `meow session list|resume|export|import`
 - `meow config init|validate|path`
 
 ### Config Separation
@@ -109,6 +109,18 @@ Use the local config to keep all state inside this repo:
 - `cargo run -- --config config/dev.local.toml config validate`
 - `cargo run -- --config config/dev.local.toml session list`
 - `cargo run -- --config config/dev.local.toml ask "hello"`
+
+### Session Backup and Restore
+
+- Export one session as JSON (default): `meow session export <SESSION_ID> [-o path.json]`
+- Export one session as Markdown: `meow session export <SESSION_ID> --format markdown [-o path.md]`
+- Export full backup snapshot (all persisted state): `meow session export --all [-o backup.json]`
+- Restore from backup snapshot: `meow session import <backup.json>`
+
+Notes:
+- `--all` exports a JSON backup snapshot intended for migration/restore workflows.
+- Markdown export is supported only for single-session exports.
+- `meow` runs SQLite integrity checks at startup and prints recovery guidance if corruption is detected.
 
 ### TUI Controls (Claude-Style Flow)
 

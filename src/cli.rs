@@ -101,6 +101,8 @@ pub enum SessionCommand {
     Resume(SessionResumeArgs),
     /// Export one session to JSON or Markdown.
     Export(SessionExportArgs),
+    /// Import a full JSON backup snapshot.
+    Import(SessionImportArgs),
 }
 
 #[derive(Debug, Args)]
@@ -111,14 +113,27 @@ pub struct SessionResumeArgs {
 
 #[derive(Debug, Args)]
 pub struct SessionExportArgs {
-    #[arg(value_name = "SESSION_ID")]
-    pub session_id: String,
+    #[arg(value_name = "SESSION_ID", required_unless_present = "all")]
+    pub session_id: Option<String>,
 
-    #[arg(long, value_enum, default_value = "json")]
-    pub format: ExportFormat,
+    #[arg(
+        long,
+        help = "Export all persisted state as one JSON backup snapshot",
+        conflicts_with = "session_id"
+    )]
+    pub all: bool,
+
+    #[arg(long, value_enum, conflicts_with = "all")]
+    pub format: Option<ExportFormat>,
 
     #[arg(long, short = 'o', value_name = "PATH")]
     pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct SessionImportArgs {
+    #[arg(value_name = "PATH")]
+    pub input: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -161,5 +176,81 @@ mod tests {
     fn rejects_removed_tui_subcommand() {
         let err = Cli::try_parse_from(["meow", "tui"]).expect_err("parse should fail");
         assert_eq!(err.kind(), ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn parses_session_export_single_session_defaults_to_json_in_app() {
+        let cli = Cli::try_parse_from(["meow", "session", "export", "session-1"])
+            .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Session { command } = command else {
+            panic!("expected session command");
+        };
+
+        let SessionCommand::Export(args) = command else {
+            panic!("expected export command");
+        };
+
+        assert_eq!(args.session_id.as_deref(), Some("session-1"));
+        assert!(!args.all);
+        assert!(args.format.is_none());
+    }
+
+    #[test]
+    fn parses_session_export_all_backup() {
+        let cli = Cli::try_parse_from(["meow", "session", "export", "--all"])
+            .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Session { command } = command else {
+            panic!("expected session command");
+        };
+
+        let SessionCommand::Export(args) = command else {
+            panic!("expected export command");
+        };
+
+        assert!(args.all);
+        assert!(args.session_id.is_none());
+    }
+
+    #[test]
+    fn rejects_session_export_without_target_scope() {
+        let err =
+            Cli::try_parse_from(["meow", "session", "export"]).expect_err("parse should fail");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn rejects_session_export_with_all_and_session_id() {
+        let err = Cli::try_parse_from(["meow", "session", "export", "session-1", "--all"])
+            .expect_err("parse should fail");
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn rejects_session_export_all_with_markdown_format() {
+        let err =
+            Cli::try_parse_from(["meow", "session", "export", "--all", "--format", "markdown"])
+                .expect_err("parse should fail");
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn parses_session_import_with_path() {
+        let cli = Cli::try_parse_from(["meow", "session", "import", "/tmp/meow-backup.json"])
+            .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Session { command } = command else {
+            panic!("expected session command");
+        };
+
+        let SessionCommand::Import(args) = command else {
+            panic!("expected import command");
+        };
+
+        assert_eq!(args.input, PathBuf::from("/tmp/meow-backup.json"));
     }
 }

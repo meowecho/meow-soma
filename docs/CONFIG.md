@@ -41,6 +41,14 @@ Security/runtime policy details:
 - Extra write roots can be allowed via environment variable `MEOW_FS_WRITE_ALLOW_ROOTS`
   - Use OS path-list format (`:` on macOS/Linux)
 
+Persistence and backup lifecycle:
+- Local state is stored in SQLite at `storage.sqlite_path` (default under `~/.meow-soma/`)
+- On startup, `meow` runs SQLite `quick_check` integrity validation before schema migrations
+- Schema upgrades are automatic via transactional, idempotent migrations (`schema_migrations` table)
+- Use `meow session export --all -o backup.json` for full-state backup snapshots
+- Use `meow session import backup.json` to restore a snapshot onto local state
+- Single-session exports remain available via `meow session export <SESSION_ID> [--format json|markdown]`
+
 ## 2) Development Config (Codex CLI)
 - Path in repo: `.codex/config.toml`
 - Used only during development to define a multi-agent team in Codex CLI
