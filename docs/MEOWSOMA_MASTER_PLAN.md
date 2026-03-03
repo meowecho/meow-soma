@@ -107,6 +107,6 @@ Failure scenarios:
   - Mitigation: provider trait boundary + adapter isolation
 
 ## Immediate Next Steps
-1. Start Phase 4 MCP hardening (schema, discovery, robust errors)
-2. Add MCP compatibility and malformed-request resilience tests
-3. Plan Phase 5 state migrations and integrity tooling
+1. Start Phase 5 state migration and data-integrity hardening
+2. Add schema versioning + migration runner with recovery messaging
+3. Expand persistence export/import validation and indexing strategy

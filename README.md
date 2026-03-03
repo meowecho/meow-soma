@@ -129,3 +129,26 @@ Use the local config to keep all state inside this repo:
 - `fs.write` is restricted to your current workspace by default
 - To allow extra write roots, set `MEOW_FS_WRITE_ALLOW_ROOTS` as an OS path list
   - macOS/Linux example: `export MEOW_FS_WRITE_ALLOW_ROOTS=\"/tmp:/Users/me/shared\"`
+
+### MCP Protocol (v1)
+
+- Transport: stdio (`meow mcp serve --transport stdio`)
+- Protocol version: `meow.mcp.v1`
+- Request correlation: `id` is preserved, and `meta.request_id` is always returned
+- Discovery: `method = "tools/list"`
+
+Example requests (one JSON line each):
+- `{"version":"meow.mcp.v1","id":"1","method":"ping"}`
+- `{"version":"meow.mcp.v1","id":"2","method":"server/info"}`
+- `{"version":"meow.mcp.v1","id":"3","method":"tools/list"}`
+- `{"version":"meow.mcp.v1","id":"4","method":"tools/call","params":{"tool":"echo","args":["hello"]}}`
+
+Error codes:
+- `invalid_json`
+- `invalid_request`
+- `unsupported_version`
+- `unknown_method`
+- `unknown_tool`
+- `approval_required`
+- `policy_denied`
+- `tool_execution_error`

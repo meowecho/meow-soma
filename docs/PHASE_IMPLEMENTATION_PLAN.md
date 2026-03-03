@@ -212,6 +212,14 @@ Verification commands:
 Objective:
 - Evolve MCP server mode from scaffold to stable client-facing capability.
 
+Current status:
+- Done:
+  - MCP request/response schema with protocol version (`meow.mcp.v1`)
+  - Structured protocol error codes and mapping for tool/policy failures
+  - Request-id correlation and structured MCP server logs
+  - Tool discovery via `tools/list` method
+  - Compatibility tests for normal and malformed request flows
+
 Scope:
 - Formalize request/response schema and lifecycle behavior.
 - Improve stdio server reliability and error handling.

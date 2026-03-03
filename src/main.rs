@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod config;
+mod mcp;
 mod policy;
 mod providers;
 mod runtime;

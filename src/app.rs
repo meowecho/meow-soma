@@ -1,17 +1,16 @@
 use std::fs;
-use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
 
 use crate::cli::{
-    Cli, Commands, ConfigCommand, ExportFormat, McpCommand, McpServeArgs, SessionCommand,
-    SessionExportArgs, SessionResumeArgs, ToolCommand, ToolExecArgs,
+    Cli, Commands, ConfigCommand, ExportFormat, McpCommand, SessionCommand, SessionExportArgs,
+    SessionResumeArgs, ToolCommand, ToolExecArgs,
 };
 use crate::config;
+use crate::mcp;
 use crate::policy::PolicyEngine;
 use crate::providers::build_provider;
 use crate::runtime::{CancellationToken, RuntimeAgent, RuntimeExecutionContext, RuntimeOperation};
@@ -170,78 +169,12 @@ fn run_mcp_command(
     command: McpCommand,
 ) -> Result<()> {
     match command {
-        McpCommand::Serve(args) => serve_mcp_stdio(state, policy, tools, args),
+        McpCommand::Serve(args) => mcp::serve_stdio(
+            args,
+            |tool_args| execute_tool_with_policy(state, policy, tools, tool_args),
+            || tools.list(),
+        ),
     }
-}
-
-fn serve_mcp_stdio(
-    state: &StateStore,
-    policy: &PolicyEngine,
-    tools: &ToolRegistry,
-    args: McpServeArgs,
-) -> Result<()> {
-    if args.transport != "stdio" {
-        bail!("only stdio transport is supported in this MVP scaffold");
-    }
-
-    eprintln!("meow mcp stdio server started. one JSON request per line.");
-
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
-    for line in stdin.lock().lines() {
-        let raw = line?;
-        let trimmed = raw.trim();
-
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        if matches!(trimmed, "exit" | "quit") {
-            break;
-        }
-
-        let request: Result<McpRequest, _> = serde_json::from_str(trimmed);
-        let response = match request {
-            Ok(req) => {
-                let request_id = req.id.clone();
-                match execute_tool_with_policy(
-                    state,
-                    policy,
-                    tools,
-                    ToolExecArgs {
-                        name: req.tool,
-                        args: req.args,
-                        approve: req.approve,
-                    },
-                ) {
-                    Ok(output) => McpResponse {
-                        id: request_id,
-                        ok: true,
-                        output: Some(output),
-                        error: None,
-                    },
-                    Err(err) => McpResponse {
-                        id: request_id,
-                        ok: false,
-                        output: None,
-                        error: Some(err.to_string()),
-                    },
-                }
-            }
-            Err(err) => McpResponse {
-                id: None,
-                ok: false,
-                output: None,
-                error: Some(format!("invalid JSON request: {err}")),
-            },
-        };
-
-        let line = serde_json::to_string(&response)?;
-        writeln!(stdout, "{line}")?;
-        stdout.flush()?;
-    }
-
-    Ok(())
 }
 
 fn run_session_command(state: &StateStore, command: SessionCommand) -> Result<()> {
@@ -479,22 +412,4 @@ fn shared_interrupt_flag() -> Result<Arc<AtomicBool>> {
     }
 
     Ok(flag)
-}
-
-#[derive(Debug, Deserialize)]
-struct McpRequest {
-    id: Option<String>,
-    tool: String,
-    #[serde(default)]
-    args: Vec<String>,
-    #[serde(default)]
-    approve: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct McpResponse {
-    id: Option<String>,
-    ok: bool,
-    output: Option<ToolOutput>,
-    error: Option<String>,
 }
