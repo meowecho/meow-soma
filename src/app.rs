@@ -351,20 +351,38 @@ fn execute_tool_with_policy(
         policy.evaluate_tool(&args.name, ToolRegistry::is_risky(&args.name))
     };
 
-    if !decision.allowed {
-        state.record_approval(&args.name, "denied", &decision.reason, false)?;
+    if !decision.is_allowed() {
+        state.record_approval(
+            &args.name,
+            "denied",
+            decision.reason_code(),
+            &decision.reason,
+            false,
+        )?;
         bail!("tool execution denied: {}", decision.reason);
     }
 
-    if decision.requires_approval {
+    if decision.requires_approval() {
         if !args.approve {
-            state.record_approval(&args.name, "required", &decision.reason, false)?;
+            state.record_approval(
+                &args.name,
+                "required",
+                decision.reason_code(),
+                &decision.reason,
+                false,
+            )?;
             bail!(
                 "tool execution requires approval ({}) - re-run with --approve",
                 decision.reason
             );
         }
-        state.record_approval(&args.name, "approved", &decision.reason, true)?;
+        state.record_approval(
+            &args.name,
+            "approved",
+            decision.reason_code(),
+            &decision.reason,
+            true,
+        )?;
     }
 
     let tool_output = tools.execute(&args.name, &args.args);

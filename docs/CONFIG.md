@@ -34,6 +34,13 @@ Retry and timeout:
 - Retryable errors include timeout, rate-limit, and most server-side failures
 - `runtime.max_steps` is used as the bounded recent-context window size for TUI chat/run prompt context loading
 
+Security/runtime policy details:
+- Policy decisions are classified as `allow`, `approve_required`, or `deny`
+- Approval audit rows persist both human-readable reason and machine-readable `reason_code`
+- `fs.write` is constrained to the current workspace root by default
+- Extra write roots can be allowed via environment variable `MEOW_FS_WRITE_ALLOW_ROOTS`
+  - Use OS path-list format (`:` on macOS/Linux)
+
 ## 2) Development Config (Codex CLI)
 - Path in repo: `.codex/config.toml`
 - Used only during development to define a multi-agent team in Codex CLI

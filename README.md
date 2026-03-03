@@ -123,3 +123,9 @@ Use the local config to keep all state inside this repo:
 - Scroll transcript: `PgUp` / `PgDn`, `Home`, `End`
 - Clear input/transcript: `Ctrl+U` / `Ctrl+L`
 - Inline approval: risky `/tool` actions show in-feed approval prompt (`y/yes` or `n/no`) without leaving TUI
+
+### Tool Safety (Workspace Boundary)
+
+- `fs.write` is restricted to your current workspace by default
+- To allow extra write roots, set `MEOW_FS_WRITE_ALLOW_ROOTS` as an OS path list
+  - macOS/Linux example: `export MEOW_FS_WRITE_ALLOW_ROOTS=\"/tmp:/Users/me/shared\"`

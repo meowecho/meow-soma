@@ -169,6 +169,14 @@ Verification commands:
 Objective:
 - Upgrade permission gate and tool sandboxing for safe real usage.
 
+Current status:
+- Done:
+  - Policy severity model (`allow`, `approve_required`, `deny`)
+  - Shell command normalization before policy checks
+  - `fs.write` workspace/approved-root boundary enforcement
+  - Approval reason-code persistence in audit records
+  - Policy/tool/state-focused test coverage
+
 Scope:
 - Improve allowlist/denylist semantics.
 - Add command classifier for high-risk shell patterns.

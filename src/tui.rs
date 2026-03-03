@@ -473,7 +473,13 @@ fn resolve_pending_approval(
     }
 
     if !approved {
-        state.record_approval(&pending.name, "rejected", &pending.reason, false)?;
+        state.record_approval(
+            &pending.name,
+            "rejected",
+            &pending.reason_code,
+            &pending.reason,
+            false,
+        )?;
         ui.push(
             "status",
             format!(
@@ -486,7 +492,13 @@ fn resolve_pending_approval(
         return Ok(false);
     }
 
-    state.record_approval(&pending.name, "approved", &pending.reason, true)?;
+    state.record_approval(
+        &pending.name,
+        "approved",
+        &pending.reason_code,
+        &pending.reason,
+        true,
+    )?;
     execute_tool_with_audit(ui, state, tools, &pending.name, &pending.args)
 }
 
@@ -532,19 +544,32 @@ fn run_tool_from_slash(
         policy.evaluate_tool(&tool_name, ToolRegistry::is_risky(&tool_name))
     };
 
-    if !decision.allowed {
-        state.record_approval(&tool_name, "denied", &decision.reason, false)?;
+    if !decision.is_allowed() {
+        state.record_approval(
+            &tool_name,
+            "denied",
+            decision.reason_code(),
+            &decision.reason,
+            false,
+        )?;
         ui.status = format!("tool denied: {}", decision.reason);
         ui.push_error(format!("tool denied: {}", decision.reason));
         ui.push_activity("approval", format!("denied {}", tool_name));
         return Ok(false);
     }
 
-    if decision.requires_approval {
-        state.record_approval(&tool_name, "required", &decision.reason, false)?;
+    if decision.requires_approval() {
+        state.record_approval(
+            &tool_name,
+            "required",
+            decision.reason_code(),
+            &decision.reason,
+            false,
+        )?;
         ui.pending_approval = Some(PendingApproval {
             name: tool_name.clone(),
             args: tool_args.clone(),
+            reason_code: decision.reason_code().to_owned(),
             reason: decision.reason.clone(),
         });
         ui.push(
@@ -660,6 +685,7 @@ struct ActivityEntry {
 struct PendingApproval {
     name: String,
     args: Vec<String>,
+    reason_code: String,
     reason: String,
 }
 

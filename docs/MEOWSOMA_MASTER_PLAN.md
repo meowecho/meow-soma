@@ -107,6 +107,6 @@ Failure scenarios:
   - Mitigation: provider trait boundary + adapter isolation
 
 ## Immediate Next Steps
-1. Start Phase 3 hardening (policy severity, workspace boundaries, shell classifier)
-2. Expand policy/tool/state integration tests with safety-focused matrices
-3. Harden MCP protocol behavior and compatibility checks (Phase 4)
+1. Start Phase 4 MCP hardening (schema, discovery, robust errors)
+2. Add MCP compatibility and malformed-request resilience tests
+3. Plan Phase 5 state migrations and integrity tooling
