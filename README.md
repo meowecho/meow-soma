@@ -114,8 +114,12 @@ Use the local config to keep all state inside this repo:
 
 - Start TUI: `cargo run -- --config config/dev.local.toml`
 - Send: `Enter`
+- Streaming: assistant output renders chunk-by-chunk in chat feed
 - Exit: `Esc`, `Ctrl+C`, `/quit`
-- Slash commands: `/help`, `/home`, `/clear`, `/session`, `/provider`, `/profile <name>`, `/new [title]`
+- Slash commands: `/help`, `/home`, `/clear`, `/session`, `/provider`, `/profile <name>`, `/new [title]`, `/tool [name ...]`, `/palette`
 - History: `Up` / `Down`
+- History search: `Ctrl+R` (cycle matching command history)
+- Command palette: `Ctrl+P` (filter + run quick commands)
 - Scroll transcript: `PgUp` / `PgDn`, `Home`, `End`
 - Clear input/transcript: `Ctrl+U` / `Ctrl+L`
+- Inline approval: risky `/tool` actions show in-feed approval prompt (`y/yes` or `n/no`) without leaving TUI

@@ -121,15 +121,15 @@ Objective:
 - Deliver an agentic terminal interface that feels like Claude Code/Codex workflows while keeping single-agent runtime architecture.
 
 Current status:
-- Baseline implemented:
+- Done:
   - `meow` full-screen terminal mode scaffold
   - Transcript/input/status panes
   - Chat submission flow wired to runtime with session persistence
   - Exit controls (`Esc`, `Ctrl+C`, `/quit`)
-- Remaining work:
-  - Streaming token rendering
-  - Inline approval prompts in TUI
-  - Rich keybindings (history/search/palette)
+  - Streaming token rendering in TUI chat feed
+  - Inline approval prompts for risky `/tool` actions
+  - Rich keybindings (`Up/Down`, `Ctrl+R` search, `Ctrl+P` palette)
+  - Updated TUI usage docs in `README.md`
 
 Scope:
 - Add full-screen TUI mode for interactive usage.

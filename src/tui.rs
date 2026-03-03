@@ -12,12 +12,14 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
+use crate::policy::PolicyEngine;
 use crate::runtime::{
     CancellationToken, ContextMessage, RuntimeAgent, RuntimeExecutionContext, RuntimeOperation,
 };
 use crate::state::StateStore;
+use crate::tools::{ToolOutput, ToolRegistry};
 
 const THEME_PRIMARY: Color = Color::Rgb(179, 123, 152); // #B37B98
 const THEME_BG: Color = Color::Rgb(9, 18, 30);
@@ -27,9 +29,20 @@ const THEME_OK: Color = Color::Rgb(130, 198, 160);
 const THEME_WARN: Color = Color::Rgb(220, 192, 120);
 const THEME_ERROR: Color = Color::Rgb(224, 130, 138);
 const MAX_DASHBOARD_HEIGHT_COMPACT: u16 = 22;
+const PALETTE_ITEMS: &[(&str, &str, &str)] = &[
+    ("Help", "/help", "Show slash commands and shortcuts"),
+    ("New Session", "/new", "Start a fresh conversation session"),
+    ("Session Info", "/session", "Show current session id"),
+    ("Provider Info", "/provider", "Show active provider/model"),
+    ("Clear Chat", "/clear", "Clear chat feed"),
+    ("List Tools", "/tool", "Show available tools"),
+    ("Exit", "/quit", "Exit Meow Soma"),
+];
 
 pub fn run_tui(
     state: &StateStore,
+    policy: &PolicyEngine,
+    tools: &ToolRegistry,
     runtime: &RuntimeAgent,
     profile_name: &str,
     context_window: usize,
@@ -51,6 +64,8 @@ pub fn run_tui(
         &mut terminal,
         &mut ui,
         state,
+        policy,
+        tools,
         runtime,
         context_window,
         cancellation,
@@ -71,6 +86,8 @@ fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ui: &mut TuiState,
     state: &StateStore,
+    policy: &PolicyEngine,
+    tools: &ToolRegistry,
     runtime: &RuntimeAgent,
     context_window: usize,
     cancellation: &CancellationToken,
@@ -93,6 +110,23 @@ fn run_loop(
         match event::read().context("failed to read terminal event")? {
             Event::Key(key) => {
                 if key.kind == KeyEventKind::Release {
+                    continue;
+                }
+
+                if ui.palette_open {
+                    let should_exit =
+                        handle_palette_key(key.code, key.modifiers, ui, state, policy, tools)?;
+                    if should_exit {
+                        break;
+                    }
+                    continue;
+                }
+
+                if matches!(key.code, KeyCode::Char('p'))
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    ui.open_palette();
+                    ui.status = "command palette".to_owned();
                     continue;
                 }
 
@@ -122,12 +156,21 @@ fn run_loop(
                     continue;
                 }
 
+                if matches!(key.code, KeyCode::Char('r'))
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    ui.history_search_next();
+                    continue;
+                }
+
                 match key.code {
                     KeyCode::Enter => {
                         let should_exit = submit_prompt(
                             terminal,
                             ui,
                             state,
+                            policy,
+                            tools,
                             runtime,
                             context_window,
                             cancellation,
@@ -139,9 +182,16 @@ fn run_loop(
                     KeyCode::Backspace => {
                         ui.input.pop();
                         ui.history_cursor = None;
+                        ui.clear_history_search();
                     }
-                    KeyCode::Up => ui.history_prev(),
-                    KeyCode::Down => ui.history_next(),
+                    KeyCode::Up => {
+                        ui.history_prev();
+                        ui.clear_history_search();
+                    }
+                    KeyCode::Down => {
+                        ui.history_next();
+                        ui.clear_history_search();
+                    }
                     KeyCode::PageUp => ui.scroll_transcript_up(8),
                     KeyCode::PageDown => ui.scroll_transcript_down(8),
                     KeyCode::Home => ui.scroll_transcript_top(),
@@ -152,10 +202,12 @@ fn run_loop(
                         }
                         ui.input.push(ch);
                         ui.history_cursor = None;
+                        ui.clear_history_search();
                     }
                     KeyCode::Tab => {
                         ui.input.push('\t');
                         ui.history_cursor = None;
+                        ui.clear_history_search();
                     }
                     _ => {}
                 }
@@ -174,6 +226,8 @@ fn submit_prompt(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ui: &mut TuiState,
     state: &StateStore,
+    policy: &PolicyEngine,
+    tools: &ToolRegistry,
     runtime: &RuntimeAgent,
     context_window: usize,
     cancellation: &CancellationToken,
@@ -185,11 +239,15 @@ fn submit_prompt(
         return Ok(false);
     }
 
-    ui.remember_history(&prompt);
-
     if prompt.starts_with('/') {
-        return handle_slash_command(ui, state, &prompt);
+        return handle_slash_command(ui, state, policy, tools, &prompt);
     }
+
+    if ui.pending_approval.is_some() {
+        return resolve_pending_approval(ui, state, tools, &prompt);
+    }
+
+    ui.remember_history(&prompt);
 
     let context_messages = load_bounded_context(state, &ui.session_id, context_window)?;
     let runtime_context = RuntimeExecutionContext::new(
@@ -212,10 +270,24 @@ fn submit_prompt(
         .context("failed to render thinking state")?;
     cancellation.clear();
 
-    match runtime.respond_with_context(&runtime_context, &prompt, cancellation) {
+    let stream_index = ui.push_assistant_streaming();
+    let mut render_stream_chunk = |chunk: &str| -> Result<()> {
+        ui.append_to_transcript(stream_index, chunk);
+        terminal
+            .draw(|frame| ui.draw(frame))
+            .context("failed to render streaming chunk")?;
+        Ok(())
+    };
+
+    match runtime.respond_with_context_streaming(
+        &runtime_context,
+        &prompt,
+        cancellation,
+        &mut render_stream_chunk,
+    ) {
         Ok(response) => {
             state.add_message(&ui.session_id, "assistant", &response.text)?;
-            ui.push_assistant(response.text);
+            ui.replace_transcript_content(stream_index, response.text);
             ui.push_activity(
                 "response",
                 format!("completed in {} ms", response.duration_ms),
@@ -224,7 +296,13 @@ fn submit_prompt(
         }
         Err(err) => {
             let message = err.to_string();
-            ui.push_error(message.clone());
+            let has_partial = ui.transcript_entry_has_content(stream_index);
+            if has_partial {
+                ui.append_to_transcript(stream_index, &format!("\n[error] {message}"));
+            } else {
+                ui.remove_transcript_entry(stream_index);
+                ui.push_error(message.clone());
+            }
             ui.push_activity("error", message.clone());
             if cancellation.is_cancelled() {
                 ui.status = "interrupted by user".to_owned();
@@ -238,7 +316,13 @@ fn submit_prompt(
     Ok(false)
 }
 
-fn handle_slash_command(ui: &mut TuiState, state: &StateStore, prompt: &str) -> Result<bool> {
+fn handle_slash_command(
+    ui: &mut TuiState,
+    state: &StateStore,
+    policy: &PolicyEngine,
+    tools: &ToolRegistry,
+    prompt: &str,
+) -> Result<bool> {
     let (cmd, args) = parse_slash_command(prompt);
     let cmd = cmd.to_ascii_lowercase();
 
@@ -250,14 +334,19 @@ fn handle_slash_command(ui: &mut TuiState, state: &StateStore, prompt: &str) -> 
         }
         "help" => {
             ui.status =
-                "commands: /help /home /clear /session /provider /profile <name> /new [title] /quit"
-                    .to_owned();
+                "commands: /help /home /clear /session /provider /profile <name> /new [title] /tool [name ...] /quit".to_owned();
             ui.push_activity("command", "/help".to_owned());
             Ok(false)
         }
         "home" => {
             ui.status = "home dashboard".to_owned();
             ui.push_activity("command", "/home".to_owned());
+            Ok(false)
+        }
+        "palette" => {
+            ui.open_palette();
+            ui.status = "command palette".to_owned();
+            ui.push_activity("command", "/palette".to_owned());
             Ok(false)
         }
         "clear" => {
@@ -300,12 +389,228 @@ fn handle_slash_command(ui: &mut TuiState, state: &StateStore, prompt: &str) -> 
             ui.push_activity("session", "started new session".to_owned());
             Ok(false)
         }
+        "tool" => run_tool_from_slash(ui, state, policy, tools, args),
         _ => {
             ui.status = format!("unknown command: /{cmd}");
             ui.push_activity("error", format!("unknown command /{cmd}"));
             Ok(false)
         }
     }
+}
+
+fn handle_palette_key(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    ui: &mut TuiState,
+    state: &StateStore,
+    policy: &PolicyEngine,
+    tools: &ToolRegistry,
+) -> Result<bool> {
+    if matches!(code, KeyCode::Char('c')) && modifiers.contains(KeyModifiers::CONTROL) {
+        ui.status = "exiting".to_owned();
+        ui.push_activity("session", "exit requested".to_owned());
+        return Ok(true);
+    }
+
+    if matches!(code, KeyCode::Esc)
+        || (matches!(code, KeyCode::Char('p')) && modifiers.contains(KeyModifiers::CONTROL))
+    {
+        ui.close_palette();
+        ui.status = "palette closed".to_owned();
+        return Ok(false);
+    }
+
+    match code {
+        KeyCode::Enter => {
+            let Some(command) = ui.selected_palette_command() else {
+                ui.status = "palette has no matching command".to_owned();
+                return Ok(false);
+            };
+            ui.close_palette();
+            handle_slash_command(ui, state, policy, tools, command)
+        }
+        KeyCode::Up => {
+            ui.palette_prev();
+            Ok(false)
+        }
+        KeyCode::Down => {
+            ui.palette_next();
+            Ok(false)
+        }
+        KeyCode::Backspace => {
+            ui.palette_backspace();
+            Ok(false)
+        }
+        KeyCode::Char(ch) => {
+            if !modifiers.contains(KeyModifiers::CONTROL) {
+                ui.palette_push(ch);
+            }
+            Ok(false)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn resolve_pending_approval(
+    ui: &mut TuiState,
+    state: &StateStore,
+    tools: &ToolRegistry,
+    prompt: &str,
+) -> Result<bool> {
+    let decision = prompt.trim().to_ascii_lowercase();
+    let Some(pending) = ui.pending_approval.take() else {
+        return Ok(false);
+    };
+
+    let approved = matches!(decision.as_str(), "y" | "yes" | "approve");
+    let rejected = matches!(decision.as_str(), "n" | "no" | "reject");
+
+    if !approved && !rejected {
+        ui.pending_approval = Some(pending.clone());
+        ui.status = "approval pending: type y/yes or n/no".to_owned();
+        ui.push_activity("approval", "invalid decision input".to_owned());
+        return Ok(false);
+    }
+
+    if !approved {
+        state.record_approval(&pending.name, "rejected", &pending.reason, false)?;
+        ui.push(
+            "status",
+            format!(
+                "tool {} rejected (reason: {})",
+                pending.name, pending.reason
+            ),
+        );
+        ui.status = "tool rejected".to_owned();
+        ui.push_activity("approval", format!("rejected {}", pending.name));
+        return Ok(false);
+    }
+
+    state.record_approval(&pending.name, "approved", &pending.reason, true)?;
+    execute_tool_with_audit(ui, state, tools, &pending.name, &pending.args)
+}
+
+fn run_tool_from_slash(
+    ui: &mut TuiState,
+    state: &StateStore,
+    policy: &PolicyEngine,
+    tools: &ToolRegistry,
+    args: &str,
+) -> Result<bool> {
+    if args.trim().is_empty() {
+        let specs = tools.list();
+        let summary = specs
+            .iter()
+            .map(|spec| format!("{}{}", spec.name, if spec.risky { " [risky]" } else { "" }))
+            .collect::<Vec<_>>()
+            .join(", ");
+        ui.push("tool", format!("available tools: {summary}"));
+        ui.status = "tool list loaded".to_owned();
+        ui.push_activity("tool", "listed tools".to_owned());
+        return Ok(false);
+    }
+
+    let parsed = parse_tool_args(args);
+    if parsed.is_empty() {
+        ui.status = "usage: /tool <name> [args ...]".to_owned();
+        return Ok(false);
+    }
+
+    let tool_name = parsed[0].clone();
+    let tool_args = parsed[1..].to_vec();
+
+    if !tools.is_known(&tool_name) {
+        ui.status = format!("unknown tool: {tool_name}");
+        ui.push_error(format!("unknown tool: {tool_name}"));
+        ui.push_activity("error", format!("unknown tool /tool {tool_name}"));
+        return Ok(false);
+    }
+
+    let decision = if tool_name == "shell" {
+        policy.evaluate_shell(&tool_args.join(" "))
+    } else {
+        policy.evaluate_tool(&tool_name, ToolRegistry::is_risky(&tool_name))
+    };
+
+    if !decision.allowed {
+        state.record_approval(&tool_name, "denied", &decision.reason, false)?;
+        ui.status = format!("tool denied: {}", decision.reason);
+        ui.push_error(format!("tool denied: {}", decision.reason));
+        ui.push_activity("approval", format!("denied {}", tool_name));
+        return Ok(false);
+    }
+
+    if decision.requires_approval {
+        state.record_approval(&tool_name, "required", &decision.reason, false)?;
+        ui.pending_approval = Some(PendingApproval {
+            name: tool_name.clone(),
+            args: tool_args.clone(),
+            reason: decision.reason.clone(),
+        });
+        ui.push(
+            "status",
+            format!(
+                "approval required for {} {} ({})",
+                tool_name,
+                tool_args.join(" "),
+                decision.reason
+            ),
+        );
+        ui.status = "approval required: type y/yes or n/no".to_owned();
+        ui.push_activity("approval", format!("required {}", tool_name));
+        return Ok(false);
+    }
+
+    execute_tool_with_audit(ui, state, tools, &tool_name, &tool_args)
+}
+
+fn execute_tool_with_audit(
+    ui: &mut TuiState,
+    state: &StateStore,
+    tools: &ToolRegistry,
+    tool_name: &str,
+    tool_args: &[String],
+) -> Result<bool> {
+    let joined_args = tool_args.join(" ");
+    match tools.execute(tool_name, tool_args) {
+        Ok(output) => {
+            record_tool_and_render(ui, state, tool_name, &joined_args, output)?;
+            Ok(false)
+        }
+        Err(err) => {
+            state.record_tool_call(tool_name, &joined_args, "error", &err.to_string())?;
+            ui.push_error(format!("tool {tool_name} failed: {err}"));
+            ui.status = "tool error".to_owned();
+            ui.push_activity("tool", format!("error {}", tool_name));
+            Ok(false)
+        }
+    }
+}
+
+fn record_tool_and_render(
+    ui: &mut TuiState,
+    state: &StateStore,
+    tool_name: &str,
+    joined_args: &str,
+    output: ToolOutput,
+) -> Result<()> {
+    state.record_tool_call(tool_name, joined_args, &output.status, &output.stdout)?;
+    if !output.stdout.trim().is_empty() {
+        ui.push("tool", output.stdout.trim_end().to_owned());
+    }
+    if !output.stderr.trim().is_empty() {
+        ui.push("tool_err", output.stderr.trim_end().to_owned());
+    }
+    if output.stdout.trim().is_empty() && output.stderr.trim().is_empty() {
+        ui.push("tool", format!("{tool_name} completed with no output"));
+    }
+    ui.status = format!("tool {tool_name}: {}", output.status);
+    ui.push_activity("tool", format!("{} {}", tool_name, output.status));
+    Ok(())
+}
+
+fn parse_tool_args(raw: &str) -> Vec<String> {
+    raw.split_whitespace().map(ToOwned::to_owned).collect()
 }
 
 fn parse_slash_command(raw: &str) -> (&str, &str) {
@@ -351,6 +656,20 @@ struct ActivityEntry {
     content: String,
 }
 
+#[derive(Debug, Clone)]
+struct PendingApproval {
+    name: String,
+    args: Vec<String>,
+    reason: String,
+}
+
+#[derive(Debug, Clone)]
+struct HistorySearchState {
+    query: String,
+    matches: Vec<usize>,
+    cursor: usize,
+}
+
 struct TuiState {
     session_id: String,
     profile: String,
@@ -364,6 +683,11 @@ struct TuiState {
     activity: Vec<ActivityEntry>,
     history: Vec<String>,
     history_cursor: Option<usize>,
+    history_search: Option<HistorySearchState>,
+    pending_approval: Option<PendingApproval>,
+    palette_open: bool,
+    palette_filter: String,
+    palette_cursor: usize,
 }
 
 impl TuiState {
@@ -381,6 +705,11 @@ impl TuiState {
             activity: Vec::new(),
             history: Vec::new(),
             history_cursor: None,
+            history_search: None,
+            pending_approval: None,
+            palette_open: false,
+            palette_filter: String::new(),
+            palette_cursor: 0,
         }
     }
 
@@ -388,8 +717,15 @@ impl TuiState {
         self.push("you", message);
     }
 
-    fn push_assistant(&mut self, message: String) {
-        self.push("meow", message);
+    fn push_assistant_streaming(&mut self) -> usize {
+        self.transcript.push(TranscriptEntry {
+            role: "meow".to_owned(),
+            content: String::new(),
+        });
+        self.enforce_transcript_bound();
+        let index = self.transcript.len().saturating_sub(1);
+        self.scroll_transcript_bottom();
+        index
     }
 
     fn push_error(&mut self, message: String) {
@@ -401,12 +737,43 @@ impl TuiState {
             role: role.to_owned(),
             content,
         });
+        self.enforce_transcript_bound();
+        self.scroll_transcript_bottom();
+    }
+
+    fn append_to_transcript(&mut self, index: usize, chunk: &str) {
+        if let Some(entry) = self.transcript.get_mut(index) {
+            entry.content.push_str(chunk);
+            self.scroll_transcript_bottom();
+        }
+    }
+
+    fn replace_transcript_content(&mut self, index: usize, content: String) {
+        if let Some(entry) = self.transcript.get_mut(index) {
+            entry.content = content;
+            self.scroll_transcript_bottom();
+        }
+    }
+
+    fn transcript_entry_has_content(&self, index: usize) -> bool {
+        self.transcript
+            .get(index)
+            .is_some_and(|entry| !entry.content.trim().is_empty())
+    }
+
+    fn remove_transcript_entry(&mut self, index: usize) {
+        if index < self.transcript.len() {
+            self.transcript.remove(index);
+            self.transcript_scroll = self.transcript_scroll.min(self.transcript_max_scroll());
+        }
+    }
+
+    fn enforce_transcript_bound(&mut self) {
         const MAX_ENTRIES: usize = 400;
         if self.transcript.len() > MAX_ENTRIES {
             let extra = self.transcript.len() - MAX_ENTRIES;
             self.transcript.drain(0..extra);
         }
-        self.scroll_transcript_bottom();
     }
 
     fn push_activity(&mut self, kind: &str, content: String) {
@@ -425,11 +792,13 @@ impl TuiState {
     fn clear_input(&mut self) {
         self.input.clear();
         self.history_cursor = None;
+        self.clear_history_search();
     }
 
     fn clear_transcript(&mut self) {
         self.transcript.clear();
         self.transcript_scroll = 0;
+        self.pending_approval = None;
     }
 
     fn remember_history(&mut self, value: &str) {
@@ -449,6 +818,7 @@ impl TuiState {
             self.history.drain(0..extra);
         }
         self.history_cursor = None;
+        self.clear_history_search();
     }
 
     fn history_prev(&mut self) {
@@ -482,6 +852,145 @@ impl TuiState {
                 self.history_cursor = Some(next);
                 self.input = self.history[next].clone();
             }
+        }
+    }
+
+    fn history_search_next(&mut self) {
+        if self.history.is_empty() {
+            self.status = "history search: no history".to_owned();
+            return;
+        }
+
+        let query = if let Some(state) = &self.history_search {
+            let selected_input = state
+                .matches
+                .get(state.cursor)
+                .and_then(|idx| self.history.get(*idx));
+            if selected_input.is_some_and(|entry| entry == &self.input) {
+                state.query.clone()
+            } else {
+                self.input.to_ascii_lowercase()
+            }
+        } else {
+            self.input.to_ascii_lowercase()
+        };
+        let query_changed = self
+            .history_search
+            .as_ref()
+            .is_none_or(|state| state.query != query);
+
+        if query_changed {
+            let mut matches = self
+                .history
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| item.to_ascii_lowercase().contains(&query))
+                .map(|(idx, _)| idx)
+                .collect::<Vec<_>>();
+            matches.reverse();
+
+            if matches.is_empty() {
+                self.status = "history search: no match".to_owned();
+                self.history_search = None;
+                return;
+            }
+
+            self.history_search = Some(HistorySearchState {
+                query,
+                matches,
+                cursor: 0,
+            });
+        } else if let Some(state) = &mut self.history_search {
+            state.cursor = (state.cursor + 1) % state.matches.len();
+        }
+
+        if let Some(state) = &self.history_search {
+            let history_index = state.matches[state.cursor];
+            self.input = self.history[history_index].clone();
+            self.history_cursor = Some(history_index);
+            self.status = format!(
+                "history search {}/{}",
+                state.cursor + 1,
+                state.matches.len()
+            );
+        }
+    }
+
+    fn clear_history_search(&mut self) {
+        self.history_search = None;
+    }
+
+    fn open_palette(&mut self) {
+        self.palette_open = true;
+        self.palette_filter.clear();
+        self.palette_cursor = 0;
+    }
+
+    fn close_palette(&mut self) {
+        self.palette_open = false;
+        self.palette_filter.clear();
+        self.palette_cursor = 0;
+    }
+
+    fn palette_push(&mut self, ch: char) {
+        self.palette_filter.push(ch);
+        self.sync_palette_cursor();
+    }
+
+    fn palette_backspace(&mut self) {
+        self.palette_filter.pop();
+        self.sync_palette_cursor();
+    }
+
+    fn palette_prev(&mut self) {
+        let len = self.palette_matches().len();
+        if len == 0 {
+            self.palette_cursor = 0;
+            return;
+        }
+        if self.palette_cursor == 0 {
+            self.palette_cursor = len - 1;
+        } else {
+            self.palette_cursor -= 1;
+        }
+    }
+
+    fn palette_next(&mut self) {
+        let len = self.palette_matches().len();
+        if len == 0 {
+            self.palette_cursor = 0;
+            return;
+        }
+        self.palette_cursor = (self.palette_cursor + 1) % len;
+    }
+
+    fn selected_palette_command(&self) -> Option<&'static str> {
+        let matches = self.palette_matches();
+        let selected = matches.get(self.palette_cursor)?;
+        Some(PALETTE_ITEMS[*selected].1)
+    }
+
+    fn palette_matches(&self) -> Vec<usize> {
+        let filter = self.palette_filter.trim().to_ascii_lowercase();
+        PALETTE_ITEMS
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                filter.is_empty()
+                    || item.0.to_ascii_lowercase().contains(&filter)
+                    || item.1.to_ascii_lowercase().contains(&filter)
+                    || item.2.to_ascii_lowercase().contains(&filter)
+            })
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    fn sync_palette_cursor(&mut self) {
+        let len = self.palette_matches().len();
+        if len == 0 {
+            self.palette_cursor = 0;
+        } else if self.palette_cursor >= len {
+            self.palette_cursor = len - 1;
         }
     }
 
@@ -543,6 +1052,9 @@ impl TuiState {
         self.draw_conversation_feed(frame, home[1]);
         self.draw_input(frame, home[2]);
         self.draw_footer(frame, home[3]);
+        if self.palette_open {
+            self.draw_palette(frame, root);
+        }
     }
 
     fn desired_feed_rows(&self, max_rows: u16, width: u16) -> u16 {
@@ -659,6 +1171,10 @@ impl TuiState {
             "Use /new to reset the session",
             Style::default().fg(THEME_MUTED),
         )));
+        right_lines.push(Line::from(Span::styled(
+            "Ctrl+R history search · Ctrl+P palette",
+            Style::default().fg(THEME_MUTED),
+        )));
         right_lines.push(Line::default());
         right_lines.push(Line::from(Span::styled(
             "----------------------------",
@@ -727,7 +1243,9 @@ impl TuiState {
         );
 
         let line = if self.input.is_empty() {
-            let placeholder = if self.in_home_mode() {
+            let placeholder = if self.pending_approval.is_some() {
+                "Approval pending: type y/yes or n/no"
+            } else if self.in_home_mode() {
                 "Try \"explain this repository architecture\""
             } else {
                 "Type a message or run /help"
@@ -758,7 +1276,10 @@ impl TuiState {
 
         let left = Paragraph::new(Line::from(vec![
             Span::styled("?", Style::default().fg(THEME_PRIMARY)),
-            Span::styled(" for shortcuts (/help)", Style::default().fg(THEME_MUTED)),
+            Span::styled(
+                " shortcuts: /help Ctrl+R(search) Ctrl+P(palette)",
+                Style::default().fg(THEME_MUTED),
+            ),
         ]))
         .style(Style::default().bg(THEME_BG));
         frame.render_widget(left, columns[0]);
@@ -772,6 +1293,83 @@ impl TuiState {
         .alignment(Alignment::Right)
         .style(Style::default().bg(THEME_BG));
         frame.render_widget(right, columns[1]);
+    }
+
+    fn draw_palette(&self, frame: &mut ratatui::Frame, root: Rect) {
+        let width = (root.width.saturating_mul(70) / 100)
+            .max(48)
+            .min(root.width);
+        let height = root.height.min(14).max(8);
+        let x = root.x + root.width.saturating_sub(width) / 2;
+        let y = root.y + root.height.saturating_sub(height) / 2;
+        let area = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+
+        frame.render_widget(Clear, area);
+
+        let matches = self.palette_matches();
+        let mut lines = Vec::new();
+        lines.push(Line::from(vec![
+            Span::styled("filter: ", Style::default().fg(THEME_MUTED)),
+            Span::styled(
+                if self.palette_filter.is_empty() {
+                    "(type to search)".to_owned()
+                } else {
+                    self.palette_filter.clone()
+                },
+                Style::default().fg(THEME_TEXT),
+            ),
+        ]));
+        lines.push(Line::default());
+
+        if matches.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No matching commands",
+                Style::default().fg(THEME_MUTED),
+            )));
+        } else {
+            let max_visible = 6_usize.min(matches.len());
+            let start = if self.palette_cursor >= max_visible {
+                self.palette_cursor + 1 - max_visible
+            } else {
+                0
+            };
+            for (visible_idx, item_idx) in matches.iter().enumerate().skip(start).take(max_visible)
+            {
+                let item = PALETTE_ITEMS[*item_idx];
+                let selected = visible_idx == self.palette_cursor;
+                let marker = if selected { ">" } else { " " };
+                let style = if selected {
+                    Style::default()
+                        .fg(THEME_PRIMARY)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(THEME_TEXT)
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{marker} {} ", item.0), style),
+                    Span::styled(item.1.to_owned(), Style::default().fg(THEME_MUTED)),
+                ]));
+            }
+        }
+
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Enter: run  Esc: close  Up/Down: navigate",
+            Style::default().fg(THEME_MUTED),
+        )));
+
+        let overlay = Paragraph::new(lines)
+            .block(panel_block(" Command Palette "))
+            .style(Style::default().bg(THEME_BG))
+            .wrap(Wrap { trim: false });
+
+        frame.render_widget(overlay, area);
     }
 }
 
@@ -804,6 +1402,7 @@ fn status_style(status: &str) -> Style {
             .add_modifier(Modifier::BOLD)
     } else if lowered.contains("thinking")
         || lowered.contains("interrupt")
+        || lowered.contains("approval")
         || lowered.contains("update")
     {
         Style::default().fg(THEME_WARN).add_modifier(Modifier::BOLD)
@@ -841,6 +1440,9 @@ fn render_entry(entry: &TranscriptEntry) -> Line<'static> {
     let role_color = match entry.role.as_str() {
         "you" => THEME_PRIMARY,
         "meow" => THEME_OK,
+        "tool" => THEME_WARN,
+        "tool_err" => THEME_ERROR,
+        "status" => THEME_MUTED,
         "error" => THEME_ERROR,
         _ => THEME_MUTED,
     };
@@ -992,6 +1594,39 @@ mod tests {
 
         state.history_next();
         assert_eq!(state.input, "");
+    }
+
+    #[test]
+    fn history_search_cycles_matching_entries() {
+        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        state.remember_history("build project");
+        state.remember_history("git status");
+        state.remember_history("git diff");
+        state.input = "git".to_owned();
+
+        state.history_search_next();
+        assert_eq!(state.input, "git diff");
+
+        state.history_search_next();
+        assert_eq!(state.input, "git status");
+    }
+
+    #[test]
+    fn palette_filters_and_selects_command() {
+        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        state.open_palette();
+        state.palette_push('p');
+        state.palette_push('r');
+        state.palette_push('o');
+
+        let selected = state.selected_palette_command();
+        assert_eq!(selected, Some("/provider"));
+    }
+
+    #[test]
+    fn parse_tool_args_splits_whitespace_words() {
+        let parsed = parse_tool_args("shell ls -la");
+        assert_eq!(parsed, vec!["shell", "ls", "-la"]);
     }
 
     #[test]

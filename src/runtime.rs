@@ -106,6 +106,20 @@ impl RuntimeAgent {
         self.complete_with_interrupt(rendered, token)
     }
 
+    pub fn respond_with_context_streaming<F>(
+        &self,
+        context: &RuntimeExecutionContext,
+        prompt: &str,
+        token: &CancellationToken,
+        on_chunk: &mut F,
+    ) -> Result<RuntimeResponse>
+    where
+        F: FnMut(&str) -> Result<()>,
+    {
+        let rendered = render_prompt(context, prompt, None);
+        self.complete_with_interrupt_streaming(rendered, token, on_chunk)
+    }
+
     pub fn run_goal_with_context(
         &self,
         context: &RuntimeExecutionContext,
@@ -143,6 +157,65 @@ impl RuntimeAgent {
 
             match rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(result) => {
+                    let text = result?;
+                    let finished = Utc::now();
+                    let duration_ms = (finished - started).num_milliseconds().max(0) as u128;
+                    return Ok(RuntimeResponse {
+                        text,
+                        started_at: started.to_rfc3339(),
+                        finished_at: finished.to_rfc3339(),
+                        duration_ms,
+                    });
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(anyhow!("provider worker disconnected before response"));
+                }
+            }
+        }
+    }
+
+    fn complete_with_interrupt_streaming<F>(
+        &self,
+        rendered_prompt: String,
+        token: &CancellationToken,
+        on_chunk: &mut F,
+    ) -> Result<RuntimeResponse>
+    where
+        F: FnMut(&str) -> Result<()>,
+    {
+        enum WorkerMessage {
+            Chunk(String),
+            Done(Result<String>),
+        }
+
+        let started = Utc::now();
+        let provider = Arc::clone(&self.provider);
+        let worker_token = token.clone();
+        let (tx, rx) = mpsc::channel::<WorkerMessage>();
+
+        thread::spawn(move || {
+            let tx_done = tx.clone();
+            let mut stream_sink = |chunk: &str| -> Result<()> {
+                tx.send(WorkerMessage::Chunk(chunk.to_owned()))
+                    .map_err(|_| anyhow!("stream channel closed"))
+            };
+            let is_cancelled = || worker_token.is_cancelled();
+            let result =
+                provider.complete_streaming(&rendered_prompt, &mut stream_sink, &is_cancelled);
+            let _ = tx_done.send(WorkerMessage::Done(result));
+        });
+
+        loop {
+            if token.is_cancelled() {
+                return Err(anyhow!("request interrupted by user"));
+            }
+
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(WorkerMessage::Chunk(chunk)) => {
+                    on_chunk(&chunk)?;
+                }
+                Ok(WorkerMessage::Done(result)) => {
                     let text = result?;
                     let finished = Utc::now();
                     let duration_ms = (finished - started).num_milliseconds().max(0) as u128;
@@ -273,6 +346,45 @@ mod tests {
         }
     }
 
+    struct ChunkedProvider {
+        chunks: Vec<String>,
+        delay_ms: u64,
+    }
+
+    impl LlmProvider for ChunkedProvider {
+        fn name(&self) -> &str {
+            "chunked"
+        }
+
+        fn model(&self) -> &str {
+            "chunked-model"
+        }
+
+        fn complete(&self, _prompt: &str) -> Result<String> {
+            Ok(self.chunks.join(""))
+        }
+
+        fn complete_streaming(
+            &self,
+            _prompt: &str,
+            on_chunk: &mut dyn FnMut(&str) -> Result<()>,
+            is_cancelled: &dyn Fn() -> bool,
+        ) -> Result<String> {
+            let mut out = String::new();
+            for chunk in &self.chunks {
+                if is_cancelled() {
+                    return Err(anyhow!("request interrupted by user"));
+                }
+                on_chunk(chunk)?;
+                out.push_str(chunk);
+                if self.delay_ms > 0 {
+                    thread::sleep(Duration::from_millis(self.delay_ms));
+                }
+            }
+            Ok(out)
+        }
+    }
+
     fn token() -> CancellationToken {
         CancellationToken::new(Arc::new(AtomicBool::new(false)))
     }
@@ -356,6 +468,59 @@ mod tests {
             .respond_with_context(&context, "interrupt me", &token)
             .expect_err("request should be interrupted");
 
+        assert!(err.to_string().contains("interrupted"));
+    }
+
+    #[test]
+    fn respond_with_context_streaming_emits_chunks() {
+        let agent = RuntimeAgent::new(Box::new(ChunkedProvider {
+            chunks: vec!["hel".to_owned(), "lo".to_owned(), "!".to_owned()],
+            delay_ms: 0,
+        }));
+        let context = RuntimeExecutionContext::new(RuntimeOperation::Chat, "default", None, vec![]);
+        let token = token();
+        let mut chunks = Vec::new();
+
+        let response = agent
+            .respond_with_context_streaming(&context, "say hi", &token, &mut |chunk| {
+                chunks.push(chunk.to_owned());
+                Ok(())
+            })
+            .expect("streaming response should succeed");
+
+        assert_eq!(chunks, vec!["hel", "lo", "!"]);
+        assert_eq!(response.text, "hello!");
+    }
+
+    #[test]
+    fn streaming_request_respects_cancellation() {
+        let agent = RuntimeAgent::new(Box::new(ChunkedProvider {
+            chunks: vec![
+                "a".to_owned(),
+                "b".to_owned(),
+                "c".to_owned(),
+                "d".to_owned(),
+            ],
+            delay_ms: 80,
+        }));
+
+        let token = token();
+        let cancel_handle = token.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            cancel_handle.request_cancel();
+        });
+
+        let context = RuntimeExecutionContext::new(RuntimeOperation::Chat, "default", None, vec![]);
+        let mut chunks = Vec::new();
+        let err = agent
+            .respond_with_context_streaming(&context, "cancel me", &token, &mut |chunk| {
+                chunks.push(chunk.to_owned());
+                Ok(())
+            })
+            .expect_err("streaming request should be interrupted");
+
+        assert!(!chunks.is_empty());
         assert!(err.to_string().contains("interrupted"));
     }
 }

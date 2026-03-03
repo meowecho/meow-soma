@@ -43,6 +43,8 @@ pub fn run(cli: Cli) -> Result<()> {
             match command {
                 None => tui::run_tui(
                     &state,
+                    &policy,
+                    &tools,
                     &runtime,
                     &profile_name,
                     context_window,

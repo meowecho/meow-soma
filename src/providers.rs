@@ -1,4 +1,5 @@
 use std::env;
+use std::io::{BufRead, BufReader};
 use std::thread;
 use std::time::Duration;
 
@@ -13,6 +14,21 @@ pub trait LlmProvider: Send + Sync {
     fn name(&self) -> &str;
     fn model(&self) -> &str;
     fn complete(&self, prompt: &str) -> Result<String>;
+    fn complete_streaming(
+        &self,
+        prompt: &str,
+        on_chunk: &mut dyn FnMut(&str) -> Result<()>,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> Result<String> {
+        let text = self.complete(prompt)?;
+        if is_cancelled() {
+            bail!("request interrupted by user");
+        }
+        if !text.is_empty() {
+            on_chunk(&text)?;
+        }
+        Ok(text)
+    }
 }
 
 pub fn build_provider(config: &MeowConfig) -> Box<dyn LlmProvider> {
@@ -137,6 +153,21 @@ impl HttpProvider {
         }
     }
 
+    fn complete_stream_once(
+        &self,
+        prompt: &str,
+        on_chunk: &mut dyn FnMut(&str) -> Result<()>,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> std::result::Result<String, ProviderError> {
+        match self.kind {
+            ProviderKind::OpenAi => self.complete_openai_stream(prompt, on_chunk, is_cancelled),
+            ProviderKind::Anthropic => {
+                self.complete_anthropic_stream(prompt, on_chunk, is_cancelled)
+            }
+            ProviderKind::Ollama => self.complete_ollama_stream(prompt, on_chunk, is_cancelled),
+        }
+    }
+
     fn complete_openai(&self, prompt: &str) -> std::result::Result<String, ProviderError> {
         let api_key = resolve_api_key(self.config.api_key_env.as_deref(), "OPENAI_API_KEY")?;
         let url = format!(
@@ -235,6 +266,172 @@ impl HttpProvider {
         parse_ollama_text(&json)
             .ok_or_else(|| ProviderError::parse("missing Ollama response field".to_owned()))
     }
+
+    fn complete_openai_stream(
+        &self,
+        prompt: &str,
+        on_chunk: &mut dyn FnMut(&str) -> Result<()>,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> std::result::Result<String, ProviderError> {
+        let api_key = resolve_api_key(self.config.api_key_env.as_deref(), "OPENAI_API_KEY")?;
+        let url = format!(
+            "{}/chat/completions",
+            self.endpoint("https://api.openai.com/v1")
+        );
+        let body = json!({
+            "model": self.config.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "stream": true
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .timeout(self.timeout())
+            .bearer_auth(api_key)
+            .json(&body)
+            .send()
+            .map_err(classify_transport_error)?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(classify_http_error(status, &body));
+        }
+
+        stream_sse_response(
+            response,
+            is_cancelled,
+            |event| {
+                let value: Value = serde_json::from_str(event).map_err(|err| {
+                    ProviderError::parse(format!("invalid OpenAI stream event: {err}"))
+                })?;
+                Ok(parse_openai_stream_delta(&value))
+            },
+            on_chunk,
+            "OpenAI",
+        )
+    }
+
+    fn complete_anthropic_stream(
+        &self,
+        prompt: &str,
+        on_chunk: &mut dyn FnMut(&str) -> Result<()>,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> std::result::Result<String, ProviderError> {
+        let api_key = resolve_api_key(self.config.api_key_env.as_deref(), "ANTHROPIC_API_KEY")?;
+        let url = format!("{}/v1/messages", self.endpoint("https://api.anthropic.com"));
+        let body = json!({
+            "model": self.config.model,
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": true,
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .timeout(self.timeout())
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&body)
+            .send()
+            .map_err(classify_transport_error)?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(classify_http_error(status, &body));
+        }
+
+        stream_sse_response(
+            response,
+            is_cancelled,
+            |event| {
+                let value: Value = serde_json::from_str(event).map_err(|err| {
+                    ProviderError::parse(format!("invalid Anthropic stream event: {err}"))
+                })?;
+                Ok(parse_anthropic_stream_delta(&value))
+            },
+            on_chunk,
+            "Anthropic",
+        )
+    }
+
+    fn complete_ollama_stream(
+        &self,
+        prompt: &str,
+        on_chunk: &mut dyn FnMut(&str) -> Result<()>,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> std::result::Result<String, ProviderError> {
+        let url = format!("{}/api/generate", self.endpoint("http://127.0.0.1:11434"));
+        let body = json!({
+            "model": self.config.model,
+            "prompt": prompt,
+            "stream": true,
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .timeout(self.timeout())
+            .json(&body)
+            .send()
+            .map_err(classify_transport_error)?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(classify_http_error(status, &body));
+        }
+
+        let mut out = String::new();
+        let mut reader = BufReader::new(response);
+        let mut line = String::new();
+
+        loop {
+            if is_cancelled() {
+                return Err(ProviderError::unknown("request interrupted by user"));
+            }
+
+            line.clear();
+            let read = reader
+                .read_line(&mut line)
+                .map_err(classify_stream_io_error)?;
+            if read == 0 {
+                break;
+            }
+
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let value: Value = serde_json::from_str(trimmed).map_err(|err| {
+                ProviderError::parse(format!("invalid Ollama stream event: {err}"))
+            })?;
+
+            if let Some(chunk) = parse_ollama_stream_chunk(&value) {
+                if !chunk.is_empty() {
+                    on_chunk(&chunk).map_err(classify_callback_error)?;
+                    out.push_str(&chunk);
+                }
+            }
+
+            if value.get("done").and_then(Value::as_bool) == Some(true) {
+                break;
+            }
+        }
+
+        if out.is_empty() {
+            return Err(ProviderError::parse(
+                "missing Ollama stream response field".to_owned(),
+            ));
+        }
+
+        Ok(out)
+    }
 }
 
 impl LlmProvider for HttpProvider {
@@ -264,27 +461,41 @@ impl LlmProvider for HttpProvider {
                         continue;
                     }
 
-                    return Err(anyhow!(
-                        "provider={} model={} kind={} status={:?} message={}",
-                        self.name(),
-                        self.model(),
-                        err.kind.as_str(),
-                        err.status,
-                        err.message
-                    ));
+                    return Err(format_provider_error(self, err));
                 }
             }
         }
 
         let err = last_error.unwrap_or_else(|| ProviderError::unknown("provider request failed"));
-        Err(anyhow!(
-            "provider={} model={} kind={} status={:?} message={}",
-            self.name(),
-            self.model(),
-            err.kind.as_str(),
-            err.status,
-            err.message
-        ))
+        Err(format_provider_error(self, err))
+    }
+
+    fn complete_streaming(
+        &self,
+        prompt: &str,
+        on_chunk: &mut dyn FnMut(&str) -> Result<()>,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> Result<String> {
+        let mut last_error: Option<ProviderError> = None;
+
+        for attempt in 0..=self.retry_budget {
+            match self.complete_stream_once(prompt, on_chunk, is_cancelled) {
+                Ok(text) => return Ok(text),
+                Err(err) => {
+                    let should_retry = err.retryable && attempt < self.retry_budget;
+                    if should_retry {
+                        last_error = Some(err);
+                        thread::sleep(retry_delay_ms(attempt));
+                        continue;
+                    }
+
+                    return Err(format_provider_error(self, err));
+                }
+            }
+        }
+
+        let err = last_error.unwrap_or_else(|| ProviderError::unknown("provider request failed"));
+        Err(format_provider_error(self, err))
     }
 }
 
@@ -395,6 +606,18 @@ fn classify_transport_error(err: reqwest::Error) -> ProviderError {
     ProviderError::transport(format!("request failed: {err}"), false)
 }
 
+fn classify_stream_io_error(err: std::io::Error) -> ProviderError {
+    if err.kind() == std::io::ErrorKind::TimedOut {
+        return ProviderError::timeout(format!("stream timed out: {err}"));
+    }
+
+    ProviderError::transport(format!("stream read failed: {err}"), true)
+}
+
+fn classify_callback_error(err: anyhow::Error) -> ProviderError {
+    ProviderError::unknown(format!("stream callback failed: {err}"))
+}
+
 fn classify_http_error(status: StatusCode, body: &str) -> ProviderError {
     let message = extract_error_message(body).unwrap_or_else(|| body.to_owned());
     let status_code = Some(status.as_u16());
@@ -461,6 +684,74 @@ fn retry_delay_ms(attempt: u8) -> Duration {
     Duration::from_millis(base * factor)
 }
 
+fn format_provider_error(provider: &dyn LlmProvider, err: ProviderError) -> anyhow::Error {
+    anyhow!(
+        "provider={} model={} kind={} status={:?} message={}",
+        provider.name(),
+        provider.model(),
+        err.kind.as_str(),
+        err.status,
+        err.message
+    )
+}
+
+fn stream_sse_response<F>(
+    response: reqwest::blocking::Response,
+    is_cancelled: &dyn Fn() -> bool,
+    mut parse_event: F,
+    on_chunk: &mut dyn FnMut(&str) -> Result<()>,
+    provider_name: &str,
+) -> std::result::Result<String, ProviderError>
+where
+    F: FnMut(&str) -> std::result::Result<Option<String>, ProviderError>,
+{
+    let mut out = String::new();
+    let mut reader = BufReader::new(response);
+    let mut line = String::new();
+
+    loop {
+        if is_cancelled() {
+            return Err(ProviderError::unknown("request interrupted by user"));
+        }
+
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(classify_stream_io_error)?;
+        if read == 0 {
+            break;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Some(data) = trimmed.strip_prefix("data:") else {
+            continue;
+        };
+        let payload = data.trim();
+        if payload == "[DONE]" {
+            break;
+        }
+
+        if let Some(chunk) = parse_event(payload)? {
+            if !chunk.is_empty() {
+                on_chunk(&chunk).map_err(classify_callback_error)?;
+                out.push_str(&chunk);
+            }
+        }
+    }
+
+    if out.is_empty() {
+        return Err(ProviderError::parse(format!(
+            "missing {provider_name} stream text output"
+        )));
+    }
+
+    Ok(out)
+}
+
 fn extract_error_message(raw: &str) -> Option<String> {
     let value: Value = serde_json::from_str(raw).ok()?;
 
@@ -501,6 +792,31 @@ fn parse_openai_text(value: &Value) -> Option<String> {
     None
 }
 
+fn parse_openai_stream_delta(value: &Value) -> Option<String> {
+    let content = value.pointer("/choices/0/delta/content")?;
+
+    if let Some(text) = content.as_str() {
+        return Some(text.to_owned());
+    }
+
+    if let Some(parts) = content.as_array() {
+        let merged = parts
+            .iter()
+            .filter_map(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        if !merged.is_empty() {
+            return Some(merged);
+        }
+    }
+
+    None
+}
+
 fn parse_anthropic_text(value: &Value) -> Option<String> {
     let blocks = value.get("content")?.as_array()?;
     let merged = blocks
@@ -517,7 +833,28 @@ fn parse_anthropic_text(value: &Value) -> Option<String> {
     }
 }
 
+fn parse_anthropic_stream_delta(value: &Value) -> Option<String> {
+    if let Some(text) = value.pointer("/delta/text").and_then(Value::as_str) {
+        return Some(text.to_owned());
+    }
+
+    if let Some(text) = value.pointer("/content_block/text").and_then(Value::as_str) {
+        if !text.is_empty() {
+            return Some(text.to_owned());
+        }
+    }
+
+    None
+}
+
 fn parse_ollama_text(value: &Value) -> Option<String> {
+    value
+        .get("response")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn parse_ollama_stream_chunk(value: &Value) -> Option<String> {
     value
         .get("response")
         .and_then(Value::as_str)
@@ -575,6 +912,37 @@ mod tests {
             parse_anthropic_text(&payload),
             Some("part a\npart b".to_owned())
         );
+    }
+
+    #[test]
+    fn parse_stream_deltas_extract_text_chunks() {
+        let openai = json!({
+            "choices": [
+                {
+                    "delta": {
+                        "content": "hel"
+                    }
+                }
+            ]
+        });
+        assert_eq!(parse_openai_stream_delta(&openai), Some("hel".to_owned()));
+
+        let anthropic = json!({
+            "type": "content_block_delta",
+            "delta": {
+                "type": "text_delta",
+                "text": "lo"
+            }
+        });
+        assert_eq!(
+            parse_anthropic_stream_delta(&anthropic),
+            Some("lo".to_owned())
+        );
+
+        let ollama = json!({
+            "response": "!"
+        });
+        assert_eq!(parse_ollama_stream_chunk(&ollama), Some("!".to_owned()));
     }
 
     #[test]

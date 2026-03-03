@@ -107,6 +107,6 @@ Failure scenarios:
   - Mitigation: provider trait boundary + adapter isolation
 
 ## Immediate Next Steps
-1. Start Phase 2.5 implementation (`meow` TUI + streaming + inline approvals)
-2. Expand unit/integration tests for policy + state + CLI flows
-3. Harden tool safety and workspace boundaries (Phase 3)
+1. Start Phase 3 hardening (policy severity, workspace boundaries, shell classifier)
+2. Expand policy/tool/state integration tests with safety-focused matrices
+3. Harden MCP protocol behavior and compatibility checks (Phase 4)
