@@ -11,24 +11,24 @@ max_depth = 2
 
 [agents.orchestrator]
 description = "Routes work, keeps scope aligned with product goals, and merges outcomes."
-config_file = ".codex/agents/orchestrator.toml"
+config_file = "agents/orchestrator.toml"
 
 [agents.planner]
 description = "Turns requests into decision-complete implementation specs."
-config_file = ".codex/agents/planner.toml"
+config_file = "agents/planner.toml"
 
 [agents.researcher]
 description = "Collects technical context from docs and repository sources."
-config_file = ".codex/agents/researcher.toml"
+config_file = "agents/researcher.toml"
 
 [agents.coder]
 description = "Implements scoped code changes and keeps architecture coherent."
-config_file = ".codex/agents/coder.toml"
+config_file = "agents/coder.toml"
 
 [agents.reviewer]
 description = "Reviews risk, correctness, regressions, and test gaps."
-config_file = ".codex/agents/reviewer.toml"
+config_file = "agents/reviewer.toml"
 
 [agents.operator]
 description = "Handles release, packaging, and operational automation tasks."
-config_file = ".codex/agents/operator.toml"
+config_file = "agents/operator.toml"
