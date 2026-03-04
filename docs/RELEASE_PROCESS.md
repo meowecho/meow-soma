@@ -50,7 +50,7 @@ GitHub workflow: `.github/workflows/release.yml`
 Trigger: push tag matching `v*.*.*`
 
 CI first runs quality gates (`fmt`, `clippy`, `check`, `test`) on Ubuntu, then uses
-`scripts/release-ci.sh` to build artifacts on macOS/Linux and publishes assets to GitHub Release.
+`scripts/release-ci.sh` to build artifacts on macOS/Linux/Windows and publishes assets to GitHub Release.
 
 ## Publish Flow
 

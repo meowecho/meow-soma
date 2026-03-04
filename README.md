@@ -107,7 +107,7 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 - Changelog: `CHANGELOG.md`
 - Contributor/agent collaboration guide: `AGENTS.md`
 
-### Installation (macOS/Linux)
+### Installation (macOS/Linux/Windows)
 
 From source:
 

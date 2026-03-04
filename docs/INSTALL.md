@@ -1,4 +1,4 @@
-# Installation Guide (macOS/Linux)
+# Installation Guide (macOS/Linux/Windows)
 
 `meow` can be installed from source or from a release artifact.
 
@@ -25,6 +25,7 @@ meow --help
    - `meow-v<version>-linux-x86_64.tar.gz`
    - `meow-v<version>-darwin-arm64.tar.gz`
    - `meow-v<version>-darwin-x86_64.tar.gz`
+   - `meow-v<version>-windows-x86_64.tar.gz`
 2. Verify checksum from matching `.sha256` file.
 3. Extract and install.
 
@@ -63,4 +64,18 @@ meow config setup --provider ollama
 ollama serve
 meow config validate
 meow ask "health check"
+```
+
+## Windows Notes
+
+- Extract artifact (PowerShell):
+
+```powershell
+tar -xzf meow-v0.1.0-windows-x86_64.tar.gz
+```
+
+- Add extracted `meow.exe` folder to `PATH`, or run directly:
+
+```powershell
+.\meow.exe --help
 ```

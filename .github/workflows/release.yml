@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - name: Checkout
@@ -53,7 +53,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build and package release artifact
-        run: VERSION=${GITHUB_REF_NAME} scripts/release-ci.sh
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: scripts/release-ci.sh
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4

@@ -9,6 +9,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### Added
 - Release scripts for local and CI packaging (`scripts/release-local.sh`, `scripts/release-ci.sh`)
 - Release workflow for version tags on GitHub
+- Windows release artifacts (`windows-x86_64`) in release workflow
 - First-run config setup helper command: `meow config setup`
 - Testing and release process documentation
 

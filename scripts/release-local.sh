@@ -36,20 +36,39 @@ cargo test
 echo "[release-local] building release binary"
 cargo build --release --locked
 
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-ARCH="$(uname -m)"
+RAW_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+case "$RAW_OS" in
+  linux*) OS="linux" ;;
+  darwin*) OS="darwin" ;;
+  msys*|mingw*|cygwin*|windows_nt*) OS="windows" ;;
+  *) OS="$RAW_OS" ;;
+esac
+
+RAW_ARCH="$(uname -m | tr '[:upper:]' '[:lower:]')"
+case "$RAW_ARCH" in
+  x86_64|amd64) ARCH="x86_64" ;;
+  arm64|aarch64) ARCH="arm64" ;;
+  *) ARCH="$RAW_ARCH" ;;
+esac
+
 DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_NAME="meow-${TAG}-${OS}-${ARCH}"
+BIN_NAME="meow"
+if [[ "$OS" == "windows" ]]; then
+  BIN_NAME="meow.exe"
+fi
 
 mkdir -p "$DIST_DIR"
-cp "$ROOT_DIR/target/release/meow" "$DIST_DIR/meow"
-tar -C "$DIST_DIR" -czf "$DIST_DIR/${PACKAGE_NAME}.tar.gz" meow
-rm -f "$DIST_DIR/meow"
+cp "$ROOT_DIR/target/release/${BIN_NAME}" "$DIST_DIR/${BIN_NAME}"
+tar -C "$DIST_DIR" -czf "$DIST_DIR/${PACKAGE_NAME}.tar.gz" "${BIN_NAME}"
+rm -f "$DIST_DIR/${BIN_NAME}"
 
 if command -v shasum >/dev/null 2>&1; then
   shasum -a 256 "$DIST_DIR/${PACKAGE_NAME}.tar.gz" > "$DIST_DIR/${PACKAGE_NAME}.tar.gz.sha256"
-else
+elif command -v sha256sum >/dev/null 2>&1; then
   sha256sum "$DIST_DIR/${PACKAGE_NAME}.tar.gz" > "$DIST_DIR/${PACKAGE_NAME}.tar.gz.sha256"
+else
+  openssl dgst -sha256 "$DIST_DIR/${PACKAGE_NAME}.tar.gz" | sed 's/^.*= //' > "$DIST_DIR/${PACKAGE_NAME}.tar.gz.sha256"
 fi
 
 echo "[release-local] built: $DIST_DIR/${PACKAGE_NAME}.tar.gz"
