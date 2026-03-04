@@ -40,8 +40,8 @@ Multi-agent is used only for development workflow via Codex CLI config.
 - `meow run "<goal>"`
 - `meow tool list|exec`
 - `meow mcp serve`
-- `meow session list|resume|export`
-- `meow config init|validate|path`
+- `meow session list|resume|export|import`
+- `meow config init|setup|validate|path`
 
 ## Milestones
 1. Foundation
@@ -107,6 +107,6 @@ Failure scenarios:
   - Mitigation: provider trait boundary + adapter isolation
 
 ## Immediate Next Steps
-1. Start Phase 5 state migration and data-integrity hardening
-2. Add schema versioning + migration runner with recovery messaging
-3. Expand persistence export/import validation and indexing strategy
+1. Start Phase 8 launch readiness and post-launch hardening
+2. Prepare v1 release notes and triage SLA process
+3. Define telemetry/operational monitoring baseline

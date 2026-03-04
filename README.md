@@ -86,7 +86,7 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 - `meow tool exec <tool> ... [--approve]`
 - `meow mcp serve --transport stdio`
 - `meow session list|resume|export|import`
-- `meow config init|validate|path`
+- `meow config init|setup|validate|path`
 
 ### Config Separation
 
@@ -101,7 +101,50 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 - Detailed phase plan: `docs/PHASE_IMPLEMENTATION_PLAN.md`
 - Config responsibilities: `docs/CONFIG.md`
 - Testing guide: `docs/TESTING.md`
+- Install guide (macOS/Linux): `docs/INSTALL.md`
+- Release process: `docs/RELEASE_PROCESS.md`
+- Release checklist: `docs/RELEASE_CHECKLIST.md`
+- Changelog: `CHANGELOG.md`
 - Contributor/agent collaboration guide: `AGENTS.md`
+
+### Installation (macOS/Linux)
+
+From source:
+
+- `cargo build --release`
+- `install -m 0755 target/release/meow /usr/local/bin/meow`
+- `meow --help`
+
+From a tagged release artifact:
+
+- Download `meow-v<version>-<os>-<arch>.tar.gz` from GitHub Releases
+- `tar -xzf meow-v<version>-<os>-<arch>.tar.gz`
+- `install -m 0755 meow /usr/local/bin/meow`
+
+See `docs/INSTALL.md` for step-by-step commands.
+
+### First-Run Quickstart (Under 10 Minutes)
+
+OpenAI:
+
+- `meow config setup --provider openai`
+- `export OPENAI_API_KEY=<your_openai_key>`
+- `meow config validate`
+- `meow ask "health check"`
+
+Anthropic:
+
+- `meow config setup --provider anthropic`
+- `export ANTHROPIC_API_KEY=<your_anthropic_key>`
+- `meow config validate`
+- `meow ask "health check"`
+
+Local Ollama:
+
+- `meow config setup --provider ollama`
+- `ollama serve`
+- `meow config validate`
+- `meow ask "health check"`
 
 ### Local-Only Dev Testing (No `~/.meow-soma`)
 
@@ -119,6 +162,12 @@ Use the local config to keep all state inside this repo:
 - `cargo test`
 
 See `docs/TESTING.md` for focused suites, fixture usage, and failure triage workflow.
+
+### Release Commands
+
+- Local package build: `scripts/release-local.sh v0.1.0`
+- CI package build (tag-triggered): `.github/workflows/release.yml`
+- CI build helper: `scripts/release-ci.sh`
 
 ### Session Backup and Restore
 

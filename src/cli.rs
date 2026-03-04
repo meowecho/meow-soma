@@ -146,6 +146,8 @@ pub enum ExportFormat {
 pub enum ConfigCommand {
     /// Create a default runtime config.
     Init(ConfigInitArgs),
+    /// First-run setup helper that initializes config and prints provider-specific next steps.
+    Setup(ConfigSetupArgs),
     /// Validate runtime config.
     Validate,
     /// Print the canonical runtime config path.
@@ -159,6 +161,25 @@ pub struct ConfigInitArgs {
 
     #[arg(long, help = "Overwrite existing file")]
     pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ConfigSetupArgs {
+    #[arg(long, short = 'o', value_name = "PATH")]
+    pub output: Option<PathBuf>,
+
+    #[arg(long, help = "Overwrite existing file")]
+    pub force: bool,
+
+    #[arg(long, value_enum, default_value = "ollama")]
+    pub provider: SetupProvider,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum SetupProvider {
+    Openai,
+    Anthropic,
+    Ollama,
 }
 
 #[cfg(test)]
@@ -302,6 +323,34 @@ mod tests {
         };
 
         assert!(matches!(command, ConfigCommand::Validate));
+    }
+
+    #[test]
+    fn parses_config_setup_command_with_provider() {
+        let cli = Cli::try_parse_from([
+            "meow",
+            "config",
+            "setup",
+            "--output",
+            "/tmp/config.toml",
+            "--provider",
+            "openai",
+            "--force",
+        ])
+        .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Config { command } = command else {
+            panic!("expected config command");
+        };
+
+        let ConfigCommand::Setup(args) = command else {
+            panic!("expected config setup command");
+        };
+
+        assert_eq!(args.output, Some(PathBuf::from("/tmp/config.toml")));
+        assert!(args.force);
+        assert_eq!(args.provider, SetupProvider::Openai);
     }
 
     #[test]

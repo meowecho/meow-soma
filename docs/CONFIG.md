@@ -28,6 +28,10 @@ Provider authentication and runtime behavior:
   - Endpoint default: `http://127.0.0.1:11434`
   - No API key required by default
 
+First-run helper:
+- `meow config setup --provider <openai|anthropic|ollama>` initializes config and sets `runtime.default_provider`
+- `meow config init` remains available for raw template creation without provider selection guidance
+
 Retry and timeout:
 - `runtime.retry_budget` controls provider retry attempts for retryable failures
 - `providers.<name>.timeout_secs` controls HTTP request timeout per attempt

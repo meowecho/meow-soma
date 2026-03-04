@@ -104,10 +104,32 @@ fn config_help_lists_subcommands() {
     assert!(output.status.success(), "expected success");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for command in ["init", "validate", "path"] {
+    for command in ["init", "setup", "validate", "path"] {
         assert!(
             stdout.contains(command),
             "config help should list `{command}`"
         );
     }
+}
+
+#[test]
+fn config_setup_writes_default_provider() {
+    let output_path = std::env::temp_dir().join(format!("meow-setup-{}.toml", std::process::id()));
+    let output_path = output_path.to_string_lossy().into_owned();
+    let output = run_meow(&[
+        "config",
+        "setup",
+        "--output",
+        &output_path,
+        "--provider",
+        "openai",
+        "--force",
+    ]);
+
+    assert!(output.status.success(), "expected success");
+    let content = std::fs::read_to_string(&output_path).expect("setup output should exist");
+    assert!(
+        content.contains("default_provider = \"openai\""),
+        "setup should persist selected default provider"
+    );
 }

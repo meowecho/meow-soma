@@ -6,8 +6,9 @@ use std::sync::{Arc, OnceLock};
 use anyhow::{Context, Result, bail};
 
 use crate::cli::{
-    Cli, Commands, ConfigCommand, ExportFormat, McpCommand, SessionCommand, SessionExportArgs,
-    SessionImportArgs, SessionResumeArgs, ToolCommand, ToolExecArgs,
+    Cli, Commands, ConfigCommand, ConfigSetupArgs, ExportFormat, McpCommand, SessionCommand,
+    SessionExportArgs, SessionImportArgs, SessionResumeArgs, SetupProvider, ToolCommand,
+    ToolExecArgs,
 };
 use crate::config;
 use crate::mcp;
@@ -296,6 +297,7 @@ fn handle_config(command: ConfigCommand, path_override: Option<&PathBuf>) -> Res
             println!("wrote config: {}", path.display());
             Ok(())
         }
+        ConfigCommand::Setup(args) => run_config_setup(args, path_override),
         ConfigCommand::Validate => run_config_validate(path_override),
         ConfigCommand::Path => {
             let path = path_override
@@ -306,6 +308,49 @@ fn handle_config(command: ConfigCommand, path_override: Option<&PathBuf>) -> Res
             Ok(())
         }
     }
+}
+
+fn run_config_setup(args: ConfigSetupArgs, path_override: Option<&PathBuf>) -> Result<()> {
+    let target = args.output.as_ref().or(path_override);
+    let path = config::write_default(target, args.force)?;
+    set_default_provider(&path, args.provider)?;
+
+    println!("initialized config: {}", path.display());
+    println!("next steps:");
+    println!("  1) meow --config {} config validate", path.display());
+
+    match args.provider {
+        SetupProvider::Openai => {
+            println!("  2) export OPENAI_API_KEY=<your_openai_key>");
+        }
+        SetupProvider::Anthropic => {
+            println!("  2) export ANTHROPIC_API_KEY=<your_anthropic_key>");
+        }
+        SetupProvider::Ollama => {
+            println!("  2) start local model runtime: ollama serve");
+        }
+    }
+
+    println!("  3) meow --config {} ask \"health check\"", path.display());
+    Ok(())
+}
+
+fn set_default_provider(path: &Path, provider: SetupProvider) -> Result<()> {
+    let provider_name = match provider {
+        SetupProvider::Openai => "openai",
+        SetupProvider::Anthropic => "anthropic",
+        SetupProvider::Ollama => "ollama",
+    };
+
+    let path_buf = path.to_path_buf();
+    let mut cfg = config::load(Some(&path_buf))?;
+    cfg.runtime.default_provider = provider_name.to_owned();
+
+    let content =
+        toml::to_string_pretty(&cfg).context("failed to serialize configured setup profile")?;
+    fs::write(path, content)
+        .with_context(|| format!("failed writing setup config: {}", path.display()))?;
+    Ok(())
 }
 
 fn execute_tool_with_policy(
@@ -576,5 +621,48 @@ mod tests {
             .expect("messages should load");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "snapshot body");
+    }
+
+    #[test]
+    fn config_setup_writes_selected_provider() {
+        let output = temp_output_path("meow-config-setup");
+        run_config_setup(
+            ConfigSetupArgs {
+                output: Some(output.clone()),
+                force: true,
+                provider: SetupProvider::Openai,
+            },
+            None,
+        )
+        .expect("config setup should succeed");
+
+        let cfg = config::load(Some(&output)).expect("setup config should load");
+        assert_eq!(cfg.runtime.default_provider, "openai");
+    }
+
+    #[test]
+    fn config_setup_without_force_fails_if_config_exists() {
+        let output = temp_output_path("meow-config-setup-existing");
+        run_config_setup(
+            ConfigSetupArgs {
+                output: Some(output.clone()),
+                force: true,
+                provider: SetupProvider::Openai,
+            },
+            None,
+        )
+        .expect("initial setup should succeed");
+
+        let err = run_config_setup(
+            ConfigSetupArgs {
+                output: Some(output),
+                force: false,
+                provider: SetupProvider::Anthropic,
+            },
+            None,
+        )
+        .expect_err("setup should fail when file already exists");
+
+        assert!(err.to_string().contains("config already exists"));
     }
 }

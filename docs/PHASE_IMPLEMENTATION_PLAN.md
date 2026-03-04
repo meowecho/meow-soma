@@ -322,6 +322,9 @@ Verification commands:
 Objective:
 - Make installation, upgrade, and first-run experience stable for external users.
 
+Current status:
+- Done
+
 Scope:
 - Add release build profiles and packaging artifacts.
 - Improve CLI help and quickstart docs.
@@ -345,7 +348,7 @@ Definition of done:
 
 Verification commands:
 - `cargo build --release`
-- `meow config init`
+- `meow config setup --provider openai`
 - `meow ask "health check"`
 
 ## Phase 8 - v1 Launch and Post-Launch Hardening

@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  verify-quality:
+    name: Verify Quality Gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo check
+        run: cargo check
+
+      - name: cargo test
+        run: cargo test
+
+  build-artifacts:
+    name: Build Artifacts (${{ matrix.os }})
+    needs: verify-quality
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build and package release artifact
+        run: VERSION=${GITHUB_REF_NAME} scripts/release-ci.sh
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: meow-${{ matrix.os }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          mapfile -t files < <(find dist -type f \( -name '*.tar.gz' -o -name '*.sha256' \))
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "error: no release artifacts found"
+            exit 1
+          fi
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${files[@]}" --clobber
+          else
+            gh release create "${tag}" "${files[@]}" --generate-notes
+          fi
