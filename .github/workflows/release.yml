@@ -89,6 +89,9 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          notes_file="$(mktemp)"
+          scripts/changelog-notes.sh "${version}" > "${notes_file}"
           mapfile -t files < <(find dist -type f \( -name '*.tar.gz' -o -name '*.sha256' \))
           if [[ "${#files[@]}" -eq 0 ]]; then
             echo "error: no release artifacts found"
@@ -97,6 +100,7 @@ jobs:
 
           if gh release view "${tag}" --repo "${GH_REPO}" >/dev/null 2>&1; then
             gh release upload "${tag}" "${files[@]}" --repo "${GH_REPO}" --clobber
+            gh release edit "${tag}" --repo "${GH_REPO}" --notes-file "${notes_file}"
           else
-            gh release create "${tag}" "${files[@]}" --repo "${GH_REPO}" --generate-notes
+            gh release create "${tag}" "${files[@]}" --repo "${GH_REPO}" --notes-file "${notes_file}"
           fi
