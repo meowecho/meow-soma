@@ -1209,33 +1209,6 @@ impl TuiState {
 
         let mut right_lines = vec![
             Line::from(Span::styled(
-                "Tips for getting started",
-                Style::default()
-                    .fg(THEME_PRIMARY)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                "Run /help to view shortcuts",
-                Style::default().fg(THEME_MUTED),
-            )),
-            Line::from(Span::styled(
-                "Press Enter to start chatting",
-                Style::default().fg(THEME_MUTED),
-            )),
-            Line::from(Span::styled(
-                "Use /new to reset the session",
-                Style::default().fg(THEME_MUTED),
-            )),
-            Line::from(Span::styled(
-                "Ctrl+R history search · Ctrl+P palette",
-                Style::default().fg(THEME_MUTED),
-            )),
-            Line::default(),
-            Line::from(Span::styled(
-                "----------------------------",
-                Style::default().fg(THEME_PRIMARY),
-            )),
-            Line::from(Span::styled(
                 "Recent activity",
                 Style::default()
                     .fg(THEME_PRIMARY)
