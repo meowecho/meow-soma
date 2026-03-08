@@ -29,6 +29,36 @@ const THEME_OK: Color = Color::Rgb(130, 198, 160);
 const THEME_WARN: Color = Color::Rgb(220, 192, 120);
 const THEME_ERROR: Color = Color::Rgb(224, 130, 138);
 const MAX_DASHBOARD_HEIGHT_COMPACT: u16 = 22;
+const MASCOT_FRAMES: [[&str; 5]; 4] = [
+    [
+        "       /\\_/\\",
+        "      / o o \\",
+        "     (   \"   )",
+        "      \\~(*)~/",
+        "       // \\\\",
+    ],
+    [
+        "       /\\_/\\",
+        "      / o o \\",
+        "     (  -\"-  )",
+        "      \\~(*)~/",
+        "      _// \\\\_",
+    ],
+    [
+        "       /\\_/\\",
+        "      / ^ ^ \\",
+        "     (   \"   )",
+        "      \\~(*)~/",
+        "       // \\\\",
+    ],
+    [
+        "       /\\_/\\",
+        "      / o o \\",
+        "     (   .   )",
+        "      \\~(*)~/",
+        "      _// \\\\_",
+    ],
+];
 const PALETTE_ITEMS: &[(&str, &str, &str)] = &[
     ("Help", "/help", "Show slash commands and shortcuts"),
     ("New Session", "/new", "Start a fresh conversation session"),
@@ -91,6 +121,7 @@ fn run_loop(
     cancellation: &CancellationToken,
 ) -> Result<()> {
     loop {
+        ui.advance_animation();
         terminal
             .draw(|frame| ui.draw(frame))
             .context("failed to render tui frame")?;
@@ -713,6 +744,7 @@ struct TuiState {
     palette_open: bool,
     palette_filter: String,
     palette_cursor: usize,
+    animation_tick: u64,
 }
 
 impl TuiState {
@@ -735,7 +767,16 @@ impl TuiState {
             palette_open: false,
             palette_filter: String::new(),
             palette_cursor: 0,
+            animation_tick: 0,
         }
+    }
+
+    fn advance_animation(&mut self) {
+        self.animation_tick = self.animation_tick.wrapping_add(1);
+    }
+
+    fn mascot_frame_index(&self) -> usize {
+        ((self.animation_tick / 2) % MASCOT_FRAMES.len() as u64) as usize
     }
 
     fn push_user(&mut self, message: String) {
@@ -1135,31 +1176,20 @@ impl TuiState {
         .wrap(Wrap { trim: false });
         frame.render_widget(welcome, left_parts[0]);
 
-        let mascot = Paragraph::new(vec![
-            Line::from(Span::styled(
-                "       /\\_/\\",
-                Style::default().fg(THEME_PRIMARY),
-            )),
-            Line::from(Span::styled(
-                "      / o o \\",
-                Style::default().fg(THEME_PRIMARY),
-            )),
-            Line::from(Span::styled(
-                "     (   \"   )",
-                Style::default().fg(THEME_PRIMARY),
-            )),
-            Line::from(Span::styled(
-                "      \\~(*)~/",
-                Style::default().fg(THEME_PRIMARY),
-            )),
-            Line::from(Span::styled(
-                "       // \\\\",
-                Style::default().fg(THEME_PRIMARY),
-            )),
-        ])
-        .alignment(Alignment::Center)
-        .style(Style::default().fg(THEME_TEXT).bg(THEME_BG))
-        .wrap(Wrap { trim: false });
+        let mascot_lines = MASCOT_FRAMES[self.mascot_frame_index()]
+            .iter()
+            .map(|line| {
+                Line::from(Span::styled(
+                    (*line).to_owned(),
+                    Style::default().fg(THEME_PRIMARY),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        let mascot = Paragraph::new(mascot_lines)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(THEME_TEXT).bg(THEME_BG))
+            .wrap(Wrap { trim: false });
         frame.render_widget(mascot, left_parts[1]);
 
         let meta = Paragraph::new(vec![
@@ -1712,5 +1742,22 @@ mod tests {
         assert_eq!(home_hero_height(26), 14);
         assert_eq!(home_hero_height(20), 12);
         assert_eq!(home_hero_height(12), 8);
+    }
+
+    #[test]
+    fn mascot_animation_cycles_frames() {
+        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        assert_eq!(state.mascot_frame_index(), 0);
+
+        state.advance_animation();
+        assert_eq!(state.mascot_frame_index(), 0);
+
+        state.advance_animation();
+        assert_eq!(state.mascot_frame_index(), 1);
+
+        for _ in 0..6 {
+            state.advance_animation();
+        }
+        assert_eq!(state.mascot_frame_index(), 0);
     }
 }
