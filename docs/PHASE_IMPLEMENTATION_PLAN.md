@@ -36,13 +36,12 @@ Objective:
 - Replace provider stubs with production integrations for OpenAI, Anthropic, and Ollama.
 
 Current status:
-- Baseline implemented:
+- Done:
   - Live HTTP adapters for OpenAI/Anthropic/Ollama
   - API key lookup from env for OpenAI/Anthropic
   - Timeout + retry behavior from config
   - Error normalization (`auth`, `rate_limit`, `timeout`, `invalid_request`, `server`, `transport`, `parse`)
-- Remaining hardening:
-  - Add provider-specific integration tests for OpenAI/Anthropic with mocked authenticated responses
+  - Provider integration tests with mocked OpenAI/Anthropic success and error cases
 
 Scope:
 - Implement HTTP clients for each provider.
@@ -79,14 +78,13 @@ Objective:
 - Make single-agent behavior consistent and predictable for real workflows.
 
 Current status:
-- Baseline implemented:
+- Done:
   - Runtime execution context model with profile + operation + bounded context messages
   - Bounded session-context loading for chat interactions
   - Profile-based prompt templates (`default`, `coding`, `research` behavior modes)
   - Interrupt handling for long requests (Ctrl+C cancellation path)
   - Improved `run` and `session` output formatting
-- Remaining hardening:
-  - Add richer profile selection UX (CLI-level profile override) if needed
+  - TUI profile switching via `/profile <name>`
 
 Scope:
 - Improve prompt pipeline and state handling for TUI chat interactions, `ask`, and `run`.
@@ -351,13 +349,32 @@ Verification commands:
 - `meow config setup --provider openai`
 - `meow ask "health check"`
 
-## Phase 8 - v1 Launch and Post-Launch Hardening
+## Phase 8 - Release and Post-Launch Hardening (v0.1.x)
+
+Current status:
+- In progress:
+  - Launch, triage/SLA, metrics, and patch workflow artifacts added:
+    - `docs/LAUNCH_CHECKLIST.md`
+    - `docs/TRIAGE_SLA.md`
+    - `docs/METRICS_BASELINE.md`
+    - `docs/PATCH_RELEASE_WORKFLOW.md`
+    - `docs/BACKLOG_V0_2.md`
+    - `docs/reports/v0.1.0-metrics-baseline.md`
+  - Incident/bug issue templates, label sync, and triage guard workflows added:
+    - `.github/ISSUE_TEMPLATE/incident.yml`
+    - `.github/ISSUE_TEMPLATE/bug-report.yml`
+    - `.github/labels.json`
+    - `.github/workflows/labels-sync.yml`
+    - `.github/workflows/triage-guard.yml`
+- Remaining execution:
+  - Publish `v0.1.0`
+  - Produce first 24h/72h triage + metrics reports
 
 Objective:
-- Ship v1 and stabilize based on real usage feedback.
+- Ship the target release and stabilize based on real usage feedback.
 
 Scope:
-- Publish first stable release.
+- Publish target release (`v0.1.0`) with full launch/runbook coverage.
 - Track critical defects and performance regressions.
 - Prioritize patch releases based on severity.
 
@@ -368,12 +385,12 @@ Implementation tasks:
 4. Execute patch release process for high-priority defects.
 
 Deliverables:
-- v1.0.0 release.
+- v0.1.0 release.
 - Post-launch incident and patch workflow.
-- Prioritized backlog for v1.1.
+- Prioritized backlog for v0.2.
 
 Definition of done:
-- v1 released with installation and operational docs.
+- v0.1.x release published with installation and operational docs.
 - Critical bugs have response and ownership process.
 - Next-cycle roadmap is documented.
 

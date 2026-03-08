@@ -104,6 +104,11 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 - Install guide (macOS/Linux): `docs/INSTALL.md`
 - Release process: `docs/RELEASE_PROCESS.md`
 - Release checklist: `docs/RELEASE_CHECKLIST.md`
+- Launch checklist: `docs/LAUNCH_CHECKLIST.md`
+- Triage and SLA: `docs/TRIAGE_SLA.md`
+- Metrics baseline: `docs/METRICS_BASELINE.md`
+- Patch workflow: `docs/PATCH_RELEASE_WORKFLOW.md`
+- Next-minor backlog: `docs/BACKLOG_V0_2.md`
 - Changelog: `CHANGELOG.md`
 - Contributor/agent collaboration guide: `AGENTS.md`
 

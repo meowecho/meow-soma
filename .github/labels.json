@@ -1,0 +1,20 @@
+[
+  { "name": "triage", "color": "D4C5F9", "description": "Needs initial classification and owner assignment" },
+  { "name": "incident", "color": "B60205", "description": "Production-impacting incident" },
+  { "name": "bug", "color": "D73A4A", "description": "User-facing defect" },
+  { "name": "regression", "color": "F9D0C4", "description": "Behavior regressed from a previous version" },
+  { "name": "performance", "color": "FBCA04", "description": "Latency, throughput, or resource issue" },
+  { "name": "security", "color": "5319E7", "description": "Security-sensitive issue" },
+  { "name": "release-blocker", "color": "B60205", "description": "Must be resolved before release" },
+  { "name": "needs-triage", "color": "F9D0C4", "description": "Missing severity/area label or assignee" },
+  { "name": "severity/p0", "color": "B60205", "description": "Critical outage or data-loss/security risk" },
+  { "name": "severity/p1", "color": "D93F0B", "description": "High-impact issue in core workflow" },
+  { "name": "severity/p2", "color": "FBCA04", "description": "Moderate impact with workaround" },
+  { "name": "severity/p3", "color": "0E8A16", "description": "Low-impact issue or polish" },
+  { "name": "area/runtime", "color": "1D76DB", "description": "Runtime and execution loop" },
+  { "name": "area/provider", "color": "1D76DB", "description": "Provider integrations and transport" },
+  { "name": "area/tui", "color": "1D76DB", "description": "Terminal UI and interaction model" },
+  { "name": "area/mcp", "color": "1D76DB", "description": "MCP protocol/server interoperability" },
+  { "name": "area/tools", "color": "1D76DB", "description": "Tool execution and policy gate" },
+  { "name": "area/state", "color": "1D76DB", "description": "Persistence, migrations, and session data" }
+]

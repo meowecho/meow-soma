@@ -107,6 +107,6 @@ Failure scenarios:
   - Mitigation: provider trait boundary + adapter isolation
 
 ## Immediate Next Steps
-1. Start Phase 8 launch readiness and post-launch hardening
-2. Prepare v1 release notes and triage SLA process
-3. Define telemetry/operational monitoring baseline
+1. Execute `docs/LAUNCH_CHECKLIST.md` and publish `v0.1.0`
+2. Run label sync workflow and confirm `Triage Guard` enforcement from `docs/TRIAGE_SLA.md` in first usage window
+3. Capture 24h/72h metrics reports using `docs/METRICS_BASELINE.md` and `docs/reports/v0.1.0-metrics-baseline.md`

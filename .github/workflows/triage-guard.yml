@@ -1,0 +1,101 @@
+name: Triage Guard
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+      - reopened
+      - labeled
+      - unlabeled
+      - assigned
+      - unassigned
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Enforce triage metadata
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            if (!issue || issue.pull_request) {
+              return;
+            }
+
+            const labels = (issue.labels || []).map((label) => label.name);
+            const trackedIssue =
+              labels.includes("incident") ||
+              labels.includes("bug");
+
+            if (!trackedIssue) {
+              return;
+            }
+
+            const hasSeverity = labels.some((name) => name.startsWith("severity/"));
+            const hasArea = labels.some((name) => name.startsWith("area/"));
+            const hasAssignee = Array.isArray(issue.assignees) && issue.assignees.length > 0;
+
+            const missing = [];
+            if (!hasSeverity) missing.push("severity/* label");
+            if (!hasArea) missing.push("area/* label");
+            if (!hasAssignee) missing.push("assignee");
+
+            const needsLabel = "needs-triage";
+            const hasNeedsLabel = labels.includes(needsLabel);
+
+            if (missing.length > 0) {
+              if (!hasNeedsLabel) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: [needsLabel]
+                });
+              }
+
+              const marker = "<!-- meow-triage-guard -->";
+              const { data: comments } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                per_page: 100
+              });
+
+              const alreadyNotified = comments.some(
+                (comment) => comment.body && comment.body.includes(marker)
+              );
+
+              if (!alreadyNotified) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body:
+                    `${marker}\n` +
+                    `Triage guard: missing ${missing.join(", ")}.\n` +
+                    `Add required metadata to satisfy \`docs/TRIAGE_SLA.md\`.`
+                });
+              }
+
+              core.info(`Issue #${issue.number} missing: ${missing.join(", ")}`);
+              return;
+            }
+
+            if (hasNeedsLabel) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name: needsLabel
+                });
+                core.info(`Removed ${needsLabel} from #${issue.number}`);
+              } catch (err) {
+                if (err.status !== 404) throw err;
+              }
+            }

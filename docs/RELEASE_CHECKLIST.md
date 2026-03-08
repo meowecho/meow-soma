@@ -25,6 +25,7 @@ Use this checklist for every version tag.
 - [ ] `git push origin vX.Y.Z`
 - [ ] GitHub release workflow finished successfully
 - [ ] GitHub Release includes artifacts and checksums
+- [ ] For milestone release (starting `v0.1.0`), run `docs/LAUNCH_CHECKLIST.md`
 
 ## Post-release Smoke
 
@@ -37,4 +38,5 @@ Use this checklist for every version tag.
 ## Follow-up
 
 - [ ] Move remaining items to `Unreleased` section
-- [ ] Track any release issues with `test`/`triage` labels
+- [ ] Track release issues with `triage` + type (`incident`/`bug`) + severity + area labels
+- [ ] Use `docs/TRIAGE_SLA.md` and `docs/METRICS_BASELINE.md` for first 72h window

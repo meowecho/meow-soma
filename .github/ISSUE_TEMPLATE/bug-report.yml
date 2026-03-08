@@ -1,0 +1,69 @@
+name: Bug Report
+description: Report a user-facing defect in runtime behavior.
+title: "bug: <short summary>"
+labels:
+  - triage
+  - bug
+body:
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - severity/p0
+        - severity/p1
+        - severity/p2
+        - severity/p3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - area/runtime
+        - area/provider
+        - area/tui
+        - area/mcp
+        - area/tools
+        - area/state
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: Command used
+      placeholder: "meow ask \"health check\""
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs/output
+    validations:
+      required: false
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, shell, provider, model, config profile
+    validations:
+      required: true

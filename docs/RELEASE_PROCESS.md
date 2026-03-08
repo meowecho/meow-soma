@@ -10,7 +10,7 @@ This document defines how `meow` releases are versioned, validated, and publishe
 - `MINOR`: backward-compatible features
 - `PATCH`: backward-compatible bug fixes
 
-Release tags must use the `vMAJOR.MINOR.PATCH` format (example: `v0.2.0`).
+Release tags must use the `vMAJOR.MINOR.PATCH` format (example: `v0.1.0`).
 
 ## Changelog Policy
 
@@ -18,7 +18,7 @@ Before tagging a release:
 
 1. Move relevant entries from `## [Unreleased]` in `CHANGELOG.md` into a new version section.
 2. Create a heading exactly matching the version number without `v` prefix.
-   - Example: `## [0.2.0] - 2026-03-04`
+   - Example: `## [0.1.0] - 2026-03-04`
 3. Keep entries grouped by category (`Added`, `Changed`, `Fixed`, `Security`).
 
 Both release scripts enforce that `CHANGELOG.md` contains a section for the target version.
@@ -28,7 +28,7 @@ Both release scripts enforce that `CHANGELOG.md` contains a section for the targ
 Use this for local reproducible packaging:
 
 ```bash
-scripts/release-local.sh v0.2.0
+scripts/release-local.sh v0.1.0
 ```
 
 What it does:
@@ -60,9 +60,12 @@ CI first runs quality gates (`fmt`, `clippy`, `check`, `test`) on Ubuntu, then u
 4. Create and push tag:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 5. Confirm release workflow succeeded and artifacts are attached.
 6. Run post-release smoke checks from `docs/RELEASE_CHECKLIST.md`.
+7. Run launch workflow from `docs/LAUNCH_CHECKLIST.md` for milestone releases (starting with `v0.1.0`).
+8. Run label sync workflow (`Sync Labels`) at least once in each release cycle (required for first launch and after label catalog changes).
+9. Confirm `Triage Guard` workflow is enabled for issue metadata enforcement.
