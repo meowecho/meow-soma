@@ -6,31 +6,35 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-03-08
+## [0.1.0] - 2026-03-09
 
 ### Added
-- Initial `meow` CLI scaffold with TUI, provider/runtime abstractions, tool policy, and MCP interop
-- Session persistence, migration, and backup/restore flows
-- Phase 6 coverage improvements with smoke tests, fixtures, and CI gates
-- Release scripts for local and CI packaging (`scripts/release-local.sh`, `scripts/release-ci.sh`)
-- Release workflow for version tags on GitHub
-- Windows release artifacts (`windows-x86_64`) in release workflow
-- First-run config setup helper command: `meow config setup`
-- Testing and release process documentation
-- Phase 8 launch and operations artifacts:
-  - `docs/LAUNCH_CHECKLIST.md`
-  - `docs/TRIAGE_SLA.md`
-  - `docs/METRICS_BASELINE.md`
-  - `docs/PATCH_RELEASE_WORKFLOW.md`
-  - `docs/BACKLOG_V0_2.md`
-  - `docs/reports/v0.1.0-metrics-baseline.md`
-- New issue templates for incident and bug triage:
-  - `.github/ISSUE_TEMPLATE/incident.yml`
-  - `.github/ISSUE_TEMPLATE/bug-report.yml`
-- Managed launch triage label baseline and sync workflow:
-  - `.github/labels.json`
-  - `.github/workflows/labels-sync.yml`
-  - `.github/workflows/triage-guard.yml`
+- `meow` unified CLI with default interactive TUI plus task-focused commands:
+  `ask`, `run`, `tool`, `mcp`, `session`, and `config`
+- Provider runtime integrations for `openai`, `anthropic`, and `ollama` with
+  timeout and retry controls
+- Streaming response pipeline (provider stream -> runtime -> TUI feed)
+- SQLite-backed persistent state for sessions, messages, runs, tool calls, and
+  approval decisions
+- Session export/import flows:
+  - Single-session export as JSON or Markdown
+  - Full backup snapshot export/import as JSON
+- Built-in tool registry with `echo`, `fs.read`, `fs.write`, and `shell`
+- Workspace safety boundary for `fs.write` with optional extra roots via
+  `MEOW_FS_WRITE_ALLOW_ROOTS`
+- Policy engine with allow/deny/approval decisions for risky shell/tool actions
+- In-feed approval gate for risky `/tool` execution (`y/yes` or `n/no`)
+- MCP stdio server (`meow mcp serve --transport stdio`) with protocol
+  `meow.mcp.v1` and methods `ping`, `server/info`, `tools/list`, `tools/call`
+- Runtime config helpers: `meow config init|setup|validate|path`
+- TUI command and navigation features:
+  - Slash commands (`/help`, `/new`, `/tool`, `/provider`, `/palette`, ...)
+  - Command palette (`Ctrl+P`)
+  - Prompt history + reverse search (`Up/Down`, `Ctrl+R`)
+  - Transcript scrolling (`PgUp/PgDn`, `Home`, `End`)
+  - Thinking status shown inline in the feed while waiting for responses
 
 ### Fixed
-- Release publish step now checks out repository context and uses explicit `GH_REPO` for `gh` commands
+- Chat feed scrolling and long-transcript behavior to preserve latest-message visibility
+- TUI stability fixes for long conversation rendering (including overflow/panic edge cases)
+- Provider error classification surface for auth/rate-limit/timeout failures
