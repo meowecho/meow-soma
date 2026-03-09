@@ -91,6 +91,16 @@ Operational rules:
 - Release notes prepared
 - Install and quickstart instructions validated
 
+## Changelog Policy
+
+- `CHANGELOG.md` must describe only software changes in `meow-soma` itself.
+- Include user-facing/runtime behavior changes such as features, fixes, commands, provider/runtime behavior, TUI behavior, and tool/policy behavior.
+- Exclude repository-maintenance-only changes from `CHANGELOG.md`:
+  - docs-only edits
+  - roadmap/phase/process updates
+  - CI/workflow/label/template housekeeping
+  - contributor guidance updates
+
 ## Code Ownership Map
 
 - `src/cli.rs`, `src/app.rs`
