@@ -130,6 +130,17 @@ pub struct StateStore {
     conn: Connection,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TelemetryEventInput<'a> {
+    metric: &'a str,
+    operation: &'a str,
+    provider: &'a str,
+    model: &'a str,
+    latency_ms: u128,
+    success: bool,
+    error_kind: &'a str,
+}
+
 impl StateStore {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -296,7 +307,15 @@ impl StateStore {
     }
 
     pub fn record_startup_latency(&self, mode: &str, latency_ms: u128) -> Result<()> {
-        self.record_telemetry_event("startup", mode, "", "", latency_ms, true, "")
+        self.record_telemetry_event(TelemetryEventInput {
+            metric: "startup",
+            operation: mode,
+            provider: "",
+            model: "",
+            latency_ms,
+            success: true,
+            error_kind: "",
+        })
     }
 
     pub fn record_response_latency(
@@ -308,15 +327,15 @@ impl StateStore {
         success: bool,
         error_kind: Option<&str>,
     ) -> Result<()> {
-        self.record_telemetry_event(
-            "response",
+        self.record_telemetry_event(TelemetryEventInput {
+            metric: "response",
             operation,
             provider,
             model,
             latency_ms,
             success,
-            error_kind.unwrap_or(""),
-        )
+            error_kind: error_kind.unwrap_or(""),
+        })
     }
 
     pub fn telemetry_summary(&self, days: u32) -> Result<TelemetrySummary> {
@@ -530,28 +549,19 @@ impl StateStore {
         tx.commit().context("failed importing state snapshot")
     }
 
-    fn record_telemetry_event(
-        &self,
-        metric: &str,
-        operation: &str,
-        provider: &str,
-        model: &str,
-        latency_ms: u128,
-        success: bool,
-        error_kind: &str,
-    ) -> Result<()> {
+    fn record_telemetry_event(&self, event: TelemetryEventInput<'_>) -> Result<()> {
         let now = now_rfc3339();
         self.conn.execute(
             "INSERT INTO telemetry_events (metric, operation, provider, model, latency_ms, success, error_kind, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                metric,
-                operation,
-                provider,
-                model,
-                clamp_latency_to_i64(latency_ms),
-                success,
-                error_kind,
+                event.metric,
+                event.operation,
+                event.provider,
+                event.model,
+                clamp_latency_to_i64(event.latency_ms),
+                event.success,
+                event.error_kind,
                 now
             ],
         )?;
