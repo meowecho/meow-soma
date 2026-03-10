@@ -432,6 +432,32 @@ impl HttpProvider {
 
         Ok(out)
     }
+
+    fn run_with_retry<T, F>(&self, mut operation: F) -> Result<T>
+    where
+        F: FnMut(u8) -> std::result::Result<T, ProviderError>,
+    {
+        let mut last_error: Option<ProviderError> = None;
+
+        for attempt in 0..=self.retry_budget {
+            match operation(attempt) {
+                Ok(output) => return Ok(output),
+                Err(err) => {
+                    let should_retry = err.retryable && attempt < self.retry_budget;
+                    if should_retry {
+                        last_error = Some(err);
+                        thread::sleep(retry_delay_ms(attempt));
+                        continue;
+                    }
+
+                    return Err(format_provider_error(self, err));
+                }
+            }
+        }
+
+        let err = last_error.unwrap_or_else(|| ProviderError::unknown("provider request failed"));
+        Err(format_provider_error(self, err))
+    }
 }
 
 impl LlmProvider for HttpProvider {
@@ -448,26 +474,7 @@ impl LlmProvider for HttpProvider {
     }
 
     fn complete(&self, prompt: &str) -> Result<String> {
-        let mut last_error: Option<ProviderError> = None;
-
-        for attempt in 0..=self.retry_budget {
-            match self.complete_once(prompt) {
-                Ok(text) => return Ok(text),
-                Err(err) => {
-                    let should_retry = err.retryable && attempt < self.retry_budget;
-                    if should_retry {
-                        last_error = Some(err);
-                        thread::sleep(retry_delay_ms(attempt));
-                        continue;
-                    }
-
-                    return Err(format_provider_error(self, err));
-                }
-            }
-        }
-
-        let err = last_error.unwrap_or_else(|| ProviderError::unknown("provider request failed"));
-        Err(format_provider_error(self, err))
+        self.run_with_retry(|_| self.complete_once(prompt))
     }
 
     fn complete_streaming(
@@ -476,26 +483,18 @@ impl LlmProvider for HttpProvider {
         on_chunk: &mut dyn FnMut(&str) -> Result<()>,
         is_cancelled: &dyn Fn() -> bool,
     ) -> Result<String> {
-        let mut last_error: Option<ProviderError> = None;
-
-        for attempt in 0..=self.retry_budget {
-            match self.complete_stream_once(prompt, on_chunk, is_cancelled) {
-                Ok(text) => return Ok(text),
-                Err(err) => {
-                    let should_retry = err.retryable && attempt < self.retry_budget;
-                    if should_retry {
-                        last_error = Some(err);
-                        thread::sleep(retry_delay_ms(attempt));
-                        continue;
-                    }
-
-                    return Err(format_provider_error(self, err));
+        self.run_with_retry(|_| {
+            let mut emitted_chunk = false;
+            let mut proxy_chunk = |chunk: &str| -> Result<()> {
+                if !chunk.is_empty() {
+                    emitted_chunk = true;
                 }
-            }
-        }
+                on_chunk(chunk)
+            };
 
-        let err = last_error.unwrap_or_else(|| ProviderError::unknown("provider request failed"));
-        Err(format_provider_error(self, err))
+            self.complete_stream_once(prompt, &mut proxy_chunk, is_cancelled)
+                .map_err(|err| adjust_stream_error_after_partial_output(err, emitted_chunk))
+        })
     }
 }
 
@@ -616,6 +615,18 @@ fn classify_stream_io_error(err: std::io::Error) -> ProviderError {
 
 fn classify_callback_error(err: anyhow::Error) -> ProviderError {
     ProviderError::unknown(format!("stream callback failed: {err}"))
+}
+
+fn adjust_stream_error_after_partial_output(
+    mut err: ProviderError,
+    emitted_chunk: bool,
+) -> ProviderError {
+    if emitted_chunk && err.retryable {
+        err.retryable = false;
+        err.message
+            .push_str(" (partial stream output already emitted; retry disabled)");
+    }
+    err
 }
 
 fn classify_http_error(status: StatusCode, body: &str) -> ProviderError {
@@ -1151,6 +1162,177 @@ mod tests {
         handle.join().expect("mock server thread should join");
     }
 
+    #[test]
+    fn openai_streaming_provider_retries_and_succeeds() {
+        let (endpoint, requests, handle) = spawn_mock_server(vec![
+            MockResponse {
+                status: 502,
+                body: "{\"error\":{\"message\":\"upstream unavailable\"}}".to_owned(),
+            },
+            MockResponse {
+                status: 200,
+                body: openai_sse_body(&["ok ", "from stream"]),
+            },
+        ]);
+
+        let (output, chunks) = with_env_var(
+            "MEOW_TEST_OPENAI_KEY_STREAM_RETRY",
+            "dummy-openai-key",
+            || {
+                let provider = HttpProvider::new(
+                    ProviderKind::OpenAi,
+                    ProviderConfig {
+                        model: "gpt-4.1".to_owned(),
+                        endpoint: Some(endpoint),
+                        api_key_env: Some("MEOW_TEST_OPENAI_KEY_STREAM_RETRY".to_owned()),
+                        timeout_secs: 2,
+                    },
+                    1,
+                );
+
+                let mut chunks = Vec::new();
+                let mut on_chunk = |chunk: &str| -> Result<()> {
+                    chunks.push(chunk.to_owned());
+                    Ok(())
+                };
+                let output = provider
+                    .complete_streaming("hello", &mut on_chunk, &|| false)
+                    .expect("streaming call should succeed after retry");
+
+                (output, chunks)
+            },
+        );
+
+        assert_eq!(output, "ok from stream");
+        assert_eq!(chunks.concat(), "ok from stream");
+
+        let req1 = requests
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first request should be captured");
+        let req2 = requests
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second request should be captured");
+        assert!(req1.contains("POST /chat/completions"));
+        assert!(req2.contains("POST /chat/completions"));
+        handle.join().expect("mock server thread should join");
+    }
+
+    #[test]
+    fn openai_streaming_maps_auth_error_end_to_end() {
+        let (endpoint, _requests, handle) = spawn_mock_server(vec![MockResponse {
+            status: 401,
+            body: "{\"error\":{\"message\":\"invalid api key\"}}".to_owned(),
+        }]);
+
+        let err = with_env_var(
+            "MEOW_TEST_OPENAI_KEY_STREAM_AUTH",
+            "dummy-openai-key",
+            || {
+                let provider = HttpProvider::new(
+                    ProviderKind::OpenAi,
+                    ProviderConfig {
+                        model: "gpt-4.1".to_owned(),
+                        endpoint: Some(endpoint),
+                        api_key_env: Some("MEOW_TEST_OPENAI_KEY_STREAM_AUTH".to_owned()),
+                        timeout_secs: 2,
+                    },
+                    0,
+                );
+                let mut on_chunk = |_chunk: &str| Ok(());
+                provider
+                    .complete_streaming("hello", &mut on_chunk, &|| false)
+                    .expect_err("stream auth error should bubble from provider")
+                    .to_string()
+            },
+        );
+
+        assert!(err.contains("kind=auth"));
+        handle.join().expect("mock server thread should join");
+    }
+
+    #[test]
+    fn openai_streaming_maps_rate_limit_error_end_to_end() {
+        let (endpoint, _requests, handle) = spawn_mock_server(vec![MockResponse {
+            status: 429,
+            body: "{\"error\":{\"message\":\"rate limit\"}}".to_owned(),
+        }]);
+
+        let err = with_env_var(
+            "MEOW_TEST_OPENAI_KEY_STREAM_RATE",
+            "dummy-openai-key",
+            || {
+                let provider = HttpProvider::new(
+                    ProviderKind::OpenAi,
+                    ProviderConfig {
+                        model: "gpt-4.1".to_owned(),
+                        endpoint: Some(endpoint),
+                        api_key_env: Some("MEOW_TEST_OPENAI_KEY_STREAM_RATE".to_owned()),
+                        timeout_secs: 2,
+                    },
+                    0,
+                );
+                let mut on_chunk = |_chunk: &str| Ok(());
+                provider
+                    .complete_streaming("hello", &mut on_chunk, &|| false)
+                    .expect_err("stream rate-limit error should bubble from provider")
+                    .to_string()
+            },
+        );
+
+        assert!(err.contains("kind=rate_limit"));
+        handle.join().expect("mock server thread should join");
+    }
+
+    #[test]
+    fn openai_streaming_maps_timeout_error_end_to_end() {
+        let (endpoint, _requests, handle) = spawn_hanging_server(Duration::from_millis(1600));
+
+        let err = with_env_var(
+            "MEOW_TEST_OPENAI_KEY_STREAM_TIMEOUT",
+            "dummy-openai-key",
+            || {
+                let provider = HttpProvider::new(
+                    ProviderKind::OpenAi,
+                    ProviderConfig {
+                        model: "gpt-4.1".to_owned(),
+                        endpoint: Some(endpoint),
+                        api_key_env: Some("MEOW_TEST_OPENAI_KEY_STREAM_TIMEOUT".to_owned()),
+                        timeout_secs: 1,
+                    },
+                    0,
+                );
+                let mut on_chunk = |_chunk: &str| Ok(());
+                provider
+                    .complete_streaming("hello", &mut on_chunk, &|| false)
+                    .expect_err("stream timeout error should bubble from provider")
+                    .to_string()
+            },
+        );
+
+        assert!(err.contains("kind=timeout"));
+        handle.join().expect("mock server thread should join");
+    }
+
+    #[test]
+    fn partial_stream_output_disables_retryable_error_retries() {
+        let timeout = ProviderError::timeout("timed out while reading stream");
+        assert!(timeout.retryable);
+
+        let adjusted = adjust_stream_error_after_partial_output(timeout, true);
+        assert!(!adjusted.retryable);
+        assert!(
+            adjusted
+                .message
+                .contains("partial stream output already emitted")
+        );
+
+        let unchanged = adjust_stream_error_after_partial_output(
+            ProviderError::timeout("still retryable"),
+            false,
+        );
+        assert!(unchanged.retryable);
+    }
+
     struct MockResponse {
         status: u16,
         body: String,
@@ -1217,6 +1399,18 @@ mod tests {
         });
 
         (format!("http://{addr}"), rx, handle)
+    }
+
+    fn openai_sse_body(chunks: &[&str]) -> String {
+        let mut body = String::new();
+        for chunk in chunks {
+            let encoded = serde_json::to_string(chunk).expect("chunk should encode");
+            body.push_str("data: {\"choices\":[{\"delta\":{\"content\":");
+            body.push_str(&encoded);
+            body.push_str("}}]}\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
     }
 
     fn with_env_var<T, F>(key: &str, value: &str, f: F) -> T

@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Changed
+- Unified provider retry behavior between one-shot and streaming paths to use the same retry policy semantics.
+- Streaming provider calls now disable retry after partial output has already been emitted to avoid duplicate/overlapping assistant text.
+
+### Added
+- Streaming parity tests for OpenAI provider retry and normalized error mapping (`auth`, `rate_limit`, `timeout`) to align behavior across interactive and one-shot flows.
+
 ## [0.1.0] - 2026-03-09
 
 ### Added
