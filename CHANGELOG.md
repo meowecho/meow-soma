@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-03-10
+
 ### Changed
 - Unified provider retry behavior between one-shot and streaming paths to use the same retry policy semantics.
 - Streaming provider calls now disable retry after partial output has already been emitted to avoid duplicate/overlapping assistant text.
