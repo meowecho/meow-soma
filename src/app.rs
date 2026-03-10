@@ -2,13 +2,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 
 use crate::cli::{
-    Cli, Commands, ConfigCommand, ConfigSetupArgs, ExportFormat, McpCommand, SessionCommand,
-    SessionExportArgs, SessionImportArgs, SessionResumeArgs, SetupProvider, ToolCommand,
-    ToolExecArgs,
+    Cli, Commands, ConfigCommand, ConfigSetupArgs, ExportFormat, McpCommand, MetricsCommand,
+    SessionCommand, SessionExportArgs, SessionImportArgs, SessionResumeArgs, SetupProvider,
+    ToolCommand, ToolExecArgs,
 };
 use crate::config;
 use crate::mcp;
@@ -20,6 +21,7 @@ use crate::tools::{ToolOutput, ToolRegistry};
 use crate::tui;
 
 pub fn run(cli: Cli) -> Result<()> {
+    let started = Instant::now();
     let config_override = cli.config.clone();
 
     match cli.command {
@@ -39,6 +41,10 @@ pub fn run(cli: Cli) -> Result<()> {
             let profile_name = cfg.project.default_profile.clone();
             let context_window = cfg.runtime.max_steps.max(1) as usize;
             let cancellation = CancellationToken::new(shared_interrupt_flag()?);
+            let mode = command_mode(command.as_ref());
+            if mode != "metrics" {
+                record_startup_metric(&state, mode, started.elapsed().as_millis());
+            }
 
             match command {
                 None => tui::run_tui(
@@ -63,6 +69,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     run_mcp_command(&state, &policy, &tools, command)
                 }
                 Some(Commands::Session { command }) => run_session_command(&state, command),
+                Some(Commands::Metrics { command }) => run_metrics_command(&state, command),
                 Some(Commands::Config { .. }) => unreachable!(),
             }
         }
@@ -87,18 +94,43 @@ fn run_ask(
     );
 
     cancellation.clear();
-    let response = runtime.respond_with_context(&runtime_context, prompt, cancellation)?;
-    println!("{}", response.text);
-    println!(
-        "[meta] profile={} provider={}:{} duration_ms={}",
-        profile_name,
-        runtime.provider_name(),
-        runtime.provider_model(),
-        response.duration_ms
-    );
-
-    state.add_message(&session_id, "assistant", &response.text)?;
-    Ok(())
+    let request_started = Instant::now();
+    match runtime.respond_with_context(&runtime_context, prompt, cancellation) {
+        Ok(response) => {
+            println!("{}", response.text);
+            println!(
+                "[meta] profile={} provider={}:{} duration_ms={}",
+                profile_name,
+                runtime.provider_name(),
+                runtime.provider_model(),
+                response.duration_ms
+            );
+            state.add_message(&session_id, "assistant", &response.text)?;
+            record_response_metric(
+                state,
+                "ask",
+                runtime.provider_name(),
+                runtime.provider_model(),
+                response.duration_ms,
+                true,
+                None,
+            );
+            Ok(())
+        }
+        Err(err) => {
+            let kind = derive_error_kind(&err);
+            record_response_metric(
+                state,
+                "ask",
+                runtime.provider_name(),
+                runtime.provider_model(),
+                request_started.elapsed().as_millis(),
+                false,
+                Some(kind.as_str()),
+            );
+            Err(err)
+        }
+    }
 }
 
 fn run_goal(
@@ -112,9 +144,19 @@ fn run_goal(
         RuntimeExecutionContext::new(RuntimeOperation::Run, profile_name, None, Vec::new());
 
     cancellation.clear();
+    let request_started = Instant::now();
     match runtime.run_goal_with_context(&runtime_context, goal, cancellation) {
         Ok(response) => {
             let run_id = state.record_run(goal, &response.text, "ok")?;
+            record_response_metric(
+                state,
+                "run",
+                runtime.provider_name(),
+                runtime.provider_model(),
+                response.duration_ms,
+                true,
+                None,
+            );
             println!("run_id      : {run_id}");
             println!("profile     : {profile_name}");
             println!(
@@ -132,6 +174,16 @@ fn run_goal(
         }
         Err(err) => {
             state.record_run(goal, &err.to_string(), "error")?;
+            let kind = derive_error_kind(&err);
+            record_response_metric(
+                state,
+                "run",
+                runtime.provider_name(),
+                runtime.provider_model(),
+                request_started.elapsed().as_millis(),
+                false,
+                Some(kind.as_str()),
+            );
             Err(err)
         }
     }
@@ -175,6 +227,50 @@ fn run_mcp_command(
             |tool_args| execute_tool_with_policy(state, policy, tools, tool_args),
             || tools.list(),
         ),
+    }
+}
+
+fn run_metrics_command(state: &StateStore, command: MetricsCommand) -> Result<()> {
+    match command {
+        MetricsCommand::Summary(args) => {
+            let summary = state.telemetry_summary(args.days)?;
+            println!("window_days       : {}", summary.window_days);
+            println!("from              : {}", summary.from);
+            println!("to                : {}", summary.to);
+            println!("total_events      : {}", summary.total_events);
+            println!();
+            println!(
+                "startup_latency_ms: {}",
+                render_latency_summary(&summary.startup)
+            );
+            println!(
+                "response_latency_ms: {}",
+                render_latency_summary(&summary.response)
+            );
+            println!("response_failures : {}", summary.response_failures);
+            println!();
+            if summary.error_categories.is_empty() {
+                println!("error_categories  : none");
+            } else {
+                println!("error_categories:");
+                for item in summary.error_categories {
+                    println!("  - {}: {}", item.kind, item.count);
+                }
+            }
+            Ok(())
+        }
+        MetricsCommand::Export(args) => {
+            let summary = state.telemetry_summary(args.days)?;
+            let payload =
+                serde_json::to_string_pretty(&summary).context("failed serializing metrics")?;
+            if let Some(path) = args.output {
+                write_text_file(&path, &payload)?;
+                println!("exported metrics summary to {}", path.display());
+            } else {
+                println!("{payload}");
+            }
+            Ok(())
+        }
     }
 }
 
@@ -307,6 +403,74 @@ fn handle_config(command: ConfigCommand, path_override: Option<&PathBuf>) -> Res
             println!("{}", path.display());
             Ok(())
         }
+    }
+}
+
+fn command_mode(command: Option<&Commands>) -> &'static str {
+    match command {
+        None => "tui",
+        Some(Commands::Ask(_)) => "ask",
+        Some(Commands::Run(_)) => "run",
+        Some(Commands::Tool { .. }) => "tool",
+        Some(Commands::Mcp { .. }) => "mcp",
+        Some(Commands::Session { .. }) => "session",
+        Some(Commands::Config { .. }) => "config",
+        Some(Commands::Metrics { .. }) => "metrics",
+    }
+}
+
+fn render_latency_summary(summary: &crate::state::TelemetryLatencySummary) -> String {
+    format!(
+        "count={} avg={} p50={} p95={} min={} max={}",
+        summary.count,
+        summary.avg_ms,
+        summary.p50_ms,
+        summary.p95_ms,
+        summary.min_ms,
+        summary.max_ms
+    )
+}
+
+fn record_startup_metric(state: &StateStore, mode: &str, latency_ms: u128) {
+    if let Err(err) = state.record_startup_latency(mode, latency_ms) {
+        eprintln!("[warn] failed to record startup telemetry: {err}");
+    }
+}
+
+fn record_response_metric(
+    state: &StateStore,
+    operation: &str,
+    provider: &str,
+    model: &str,
+    latency_ms: u128,
+    success: bool,
+    error_kind: Option<&str>,
+) {
+    if let Err(err) =
+        state.record_response_latency(operation, provider, model, latency_ms, success, error_kind)
+    {
+        eprintln!("[warn] failed to record response telemetry: {err}");
+    }
+}
+
+fn derive_error_kind(err: &anyhow::Error) -> String {
+    let text = err.to_string();
+    if let Some(idx) = text.find("kind=") {
+        let raw = &text[idx + 5..];
+        if let Some(kind) = raw
+            .split(|c: char| c.is_whitespace() || c == ')' || c == ',')
+            .next()
+            && !kind.is_empty()
+        {
+            return kind.to_owned();
+        }
+    }
+
+    let lowered = text.to_ascii_lowercase();
+    if lowered.contains("interrupted") {
+        "interrupted".to_owned()
+    } else {
+        "unknown".to_owned()
     }
 }
 
@@ -502,7 +666,7 @@ fn shared_interrupt_flag() -> Result<Arc<AtomicBool>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::StateSnapshot;
+    use crate::state::{StateSnapshot, TelemetrySummary};
     use uuid::Uuid;
 
     fn temp_db_path(prefix: &str) -> PathBuf {
@@ -664,5 +828,36 @@ mod tests {
         .expect_err("setup should fail when file already exists");
 
         assert!(err.to_string().contains("config already exists"));
+    }
+
+    #[test]
+    fn metrics_export_writes_json_summary() {
+        let db_path = temp_db_path("meow-app-metrics-export");
+        let out_path = temp_output_path("meow-app-metrics-export");
+        let state = StateStore::open(&db_path).expect("state store should open");
+        state
+            .record_startup_latency("ask", 140)
+            .expect("startup telemetry should be recorded");
+        state
+            .record_response_latency("ask", "openai", "gpt-4.1", 520, false, Some("timeout"))
+            .expect("response telemetry should be recorded");
+
+        run_metrics_command(
+            &state,
+            MetricsCommand::Export(crate::cli::MetricsExportArgs {
+                days: 7,
+                output: Some(out_path.clone()),
+            }),
+        )
+        .expect("metrics export should succeed");
+
+        let payload = fs::read_to_string(&out_path).expect("metrics export file should exist");
+        let summary: TelemetrySummary =
+            serde_json::from_str(&payload).expect("metrics export should be valid JSON");
+        assert_eq!(summary.window_days, 7);
+        assert_eq!(summary.total_events, 2);
+        assert_eq!(summary.response_failures, 1);
+        assert_eq!(summary.error_categories.len(), 1);
+        assert_eq!(summary.error_categories[0].kind, "timeout");
     }
 }

@@ -44,6 +44,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Inspect and export runtime telemetry metrics.
+    Metrics {
+        #[command(subcommand)]
+        command: MetricsCommand,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -152,6 +157,29 @@ pub enum ConfigCommand {
     Validate,
     /// Print the canonical runtime config path.
     Path,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MetricsCommand {
+    /// Print a summarized telemetry window.
+    Summary(MetricsSummaryArgs),
+    /// Export telemetry summary as JSON.
+    Export(MetricsExportArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct MetricsSummaryArgs {
+    #[arg(long, default_value_t = 7, value_name = "DAYS")]
+    pub days: u32,
+}
+
+#[derive(Debug, Args)]
+pub struct MetricsExportArgs {
+    #[arg(long, default_value_t = 7, value_name = "DAYS")]
+    pub days: u32,
+
+    #[arg(long, short = 'o', value_name = "PATH")]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -363,6 +391,49 @@ mod tests {
         };
 
         assert!(matches!(command, ConfigCommand::Path));
+    }
+
+    #[test]
+    fn parses_metrics_summary_command() {
+        let cli = Cli::try_parse_from(["meow", "metrics", "summary", "--days", "14"])
+            .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Metrics { command } = command else {
+            panic!("expected metrics command");
+        };
+
+        let MetricsCommand::Summary(args) = command else {
+            panic!("expected metrics summary command");
+        };
+
+        assert_eq!(args.days, 14);
+    }
+
+    #[test]
+    fn parses_metrics_export_command() {
+        let cli = Cli::try_parse_from([
+            "meow",
+            "metrics",
+            "export",
+            "--days",
+            "30",
+            "--output",
+            "/tmp/meow-metrics.json",
+        ])
+        .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Metrics { command } = command else {
+            panic!("expected metrics command");
+        };
+
+        let MetricsCommand::Export(args) = command else {
+            panic!("expected metrics export command");
+        };
+
+        assert_eq!(args.days, 30);
+        assert_eq!(args.output, Some(PathBuf::from("/tmp/meow-metrics.json")));
     }
 
     #[test]

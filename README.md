@@ -87,6 +87,8 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 - `meow mcp serve --transport stdio`
 - `meow session list|resume|export|import`
 - `meow config init|setup|validate|path`
+- `meow metrics summary [--days N]`
+- `meow metrics export [--days N] [-o metrics.json]`
 
 ### Config Separation
 

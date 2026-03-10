@@ -1,13 +1,14 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use rusqlite::{Connection, Transaction, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const LATEST_SCHEMA_VERSION: i64 = 3;
+pub const LATEST_SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct SessionRecord {
@@ -66,6 +67,47 @@ pub struct ArtifactRecord {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct TelemetryEventRecord {
+    pub id: i64,
+    pub metric: String,
+    pub operation: String,
+    pub provider: String,
+    pub model: String,
+    pub latency_ms: i64,
+    pub success: bool,
+    pub error_kind: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct TelemetryLatencySummary {
+    pub count: u64,
+    pub avg_ms: u64,
+    pub p50_ms: u64,
+    pub p95_ms: u64,
+    pub min_ms: u64,
+    pub max_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct TelemetryErrorSummary {
+    pub kind: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct TelemetrySummary {
+    pub window_days: u32,
+    pub from: String,
+    pub to: String,
+    pub total_events: u64,
+    pub startup: TelemetryLatencySummary,
+    pub response: TelemetryLatencySummary,
+    pub response_failures: u64,
+    pub error_categories: Vec<TelemetryErrorSummary>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct StateSnapshot {
     pub schema_version: i64,
     pub exported_at: String,
@@ -79,6 +121,8 @@ pub struct StateSnapshot {
     pub approvals: Vec<ApprovalRecord>,
     #[serde(default)]
     pub artifacts: Vec<ArtifactRecord>,
+    #[serde(default)]
+    pub telemetry_events: Vec<TelemetryEventRecord>,
 }
 
 #[derive(Debug)]
@@ -251,6 +295,100 @@ impl StateStore {
         Ok(())
     }
 
+    pub fn record_startup_latency(&self, mode: &str, latency_ms: u128) -> Result<()> {
+        self.record_telemetry_event("startup", mode, "", "", latency_ms, true, "")
+    }
+
+    pub fn record_response_latency(
+        &self,
+        operation: &str,
+        provider: &str,
+        model: &str,
+        latency_ms: u128,
+        success: bool,
+        error_kind: Option<&str>,
+    ) -> Result<()> {
+        self.record_telemetry_event(
+            "response",
+            operation,
+            provider,
+            model,
+            latency_ms,
+            success,
+            error_kind.unwrap_or(""),
+        )
+    }
+
+    pub fn telemetry_summary(&self, days: u32) -> Result<TelemetrySummary> {
+        let window_days = days.max(1);
+        let now = Utc::now();
+        let since = now - Duration::days(window_days as i64);
+        let from = since.to_rfc3339();
+        let to = now.to_rfc3339();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, metric, operation, provider, model, latency_ms, success, error_kind, created_at \
+             FROM telemetry_events \
+             WHERE created_at >= ?1 \
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![from], |row| {
+            Ok(TelemetryEventRecord {
+                id: row.get(0)?,
+                metric: row.get(1)?,
+                operation: row.get(2)?,
+                provider: row.get(3)?,
+                model: row.get(4)?,
+                latency_ms: row.get(5)?,
+                success: row.get(6)?,
+                error_kind: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        })?;
+
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row?);
+        }
+
+        let mut startup_latencies = Vec::new();
+        let mut response_latencies = Vec::new();
+        let mut response_failures = 0_u64;
+        let mut error_counts: BTreeMap<String, u64> = BTreeMap::new();
+
+        for event in &events {
+            if event.metric == "startup" {
+                startup_latencies.push(event.latency_ms);
+            }
+            if event.metric == "response" {
+                response_latencies.push(event.latency_ms);
+                if !event.success {
+                    response_failures += 1;
+                }
+            }
+
+            if !event.error_kind.is_empty() {
+                *error_counts.entry(event.error_kind.clone()).or_insert(0) += 1;
+            }
+        }
+
+        let error_categories = error_counts
+            .into_iter()
+            .map(|(kind, count)| TelemetryErrorSummary { kind, count })
+            .collect();
+
+        Ok(TelemetrySummary {
+            window_days,
+            from,
+            to,
+            total_events: events.len() as u64,
+            startup: compute_latency_summary(&startup_latencies),
+            response: compute_latency_summary(&response_latencies),
+            response_failures,
+            error_categories,
+        })
+    }
+
     pub fn export_snapshot(&self) -> Result<StateSnapshot> {
         Ok(StateSnapshot {
             schema_version: LATEST_SCHEMA_VERSION,
@@ -261,6 +399,7 @@ impl StateStore {
             tool_calls: self.list_tool_calls()?,
             approvals: self.list_approvals()?,
             artifacts: self.list_artifacts()?,
+            telemetry_events: self.list_telemetry_events()?,
         })
     }
 
@@ -293,6 +432,7 @@ impl StateStore {
             DELETE FROM tool_calls;
             DELETE FROM approvals;
             DELETE FROM artifacts;
+            DELETE FROM telemetry_events;
             "#,
         )?;
 
@@ -369,7 +509,53 @@ impl StateStore {
             )?;
         }
 
+        for event in &snapshot.telemetry_events {
+            tx.execute(
+                "INSERT INTO telemetry_events (id, metric, operation, provider, model, latency_ms, success, error_kind, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    event.id,
+                    event.metric,
+                    event.operation,
+                    event.provider,
+                    event.model,
+                    event.latency_ms,
+                    event.success,
+                    event.error_kind,
+                    event.created_at
+                ],
+            )?;
+        }
+
         tx.commit().context("failed importing state snapshot")
+    }
+
+    fn record_telemetry_event(
+        &self,
+        metric: &str,
+        operation: &str,
+        provider: &str,
+        model: &str,
+        latency_ms: u128,
+        success: bool,
+        error_kind: &str,
+    ) -> Result<()> {
+        let now = now_rfc3339();
+        self.conn.execute(
+            "INSERT INTO telemetry_events (metric, operation, provider, model, latency_ms, success, error_kind, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                metric,
+                operation,
+                provider,
+                model,
+                clamp_latency_to_i64(latency_ms),
+                success,
+                error_kind,
+                now
+            ],
+        )?;
+        Ok(())
     }
 
     fn run_migrations(&self) -> Result<()> {
@@ -556,6 +742,32 @@ impl StateStore {
         }
         Ok(artifacts)
     }
+
+    fn list_telemetry_events(&self) -> Result<Vec<TelemetryEventRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, metric, operation, provider, model, latency_ms, success, error_kind, created_at \
+             FROM telemetry_events ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(TelemetryEventRecord {
+                id: row.get(0)?,
+                metric: row.get(1)?,
+                operation: row.get(2)?,
+                provider: row.get(3)?,
+                model: row.get(4)?,
+                latency_ms: row.get(5)?,
+                success: row.get(6)?,
+                error_kind: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        })?;
+
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row?);
+        }
+        Ok(events)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -577,6 +789,10 @@ fn schema_migrations() -> [Migration; LATEST_SCHEMA_VERSION as usize] {
         Migration {
             version: 3,
             apply: migration_v3,
+        },
+        Migration {
+            version: 4,
+            apply: migration_v4,
         },
     ]
 }
@@ -656,6 +872,28 @@ fn migration_v3(tx: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
+fn migration_v4(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS telemetry_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            metric TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            latency_ms INTEGER NOT NULL,
+            success INTEGER NOT NULL,
+            error_kind TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_telemetry_created_at ON telemetry_events(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_telemetry_metric_created_at ON telemetry_events(metric, created_at DESC);
+        "#,
+    )?;
+    Ok(())
+}
+
 fn ensure_column(tx: &Transaction<'_>, table: &str, column: &str, definition: &str) -> Result<()> {
     let statement = format!("ALTER TABLE {table} ADD COLUMN {column} {definition}");
     match tx.execute(&statement, []) {
@@ -693,6 +931,56 @@ fn corruption_recovery_message(path: &Path, detail: &str) -> String {
         path.display(),
         path.display()
     )
+}
+
+fn clamp_latency_to_i64(value: u128) -> i64 {
+    value.min(i64::MAX as u128) as i64
+}
+
+fn compute_latency_summary(latencies: &[i64]) -> TelemetryLatencySummary {
+    if latencies.is_empty() {
+        return TelemetryLatencySummary {
+            count: 0,
+            avg_ms: 0,
+            p50_ms: 0,
+            p95_ms: 0,
+            min_ms: 0,
+            max_ms: 0,
+        };
+    }
+
+    let mut values = latencies
+        .iter()
+        .map(|value| (*value).max(0) as u64)
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+
+    let count = values.len() as u64;
+    let sum = values.iter().sum::<u64>();
+    let min = values.first().copied().unwrap_or(0);
+    let max = values.last().copied().unwrap_or(0);
+    let p50 = percentile_value(&values, 50);
+    let p95 = percentile_value(&values, 95);
+
+    TelemetryLatencySummary {
+        count,
+        avg_ms: if count == 0 { 0 } else { sum / count },
+        p50_ms: p50,
+        p95_ms: p95,
+        min_ms: min,
+        max_ms: max,
+    }
+}
+
+fn percentile_value(sorted_values: &[u64], percentile: usize) -> u64 {
+    if sorted_values.is_empty() {
+        return 0;
+    }
+
+    let count = sorted_values.len();
+    let rank = (count * percentile).div_ceil(100);
+    let index = rank.saturating_sub(1).min(count.saturating_sub(1));
+    sorted_values[index]
 }
 
 fn now_rfc3339() -> String {
@@ -860,6 +1148,7 @@ mod tests {
             "idx_tool_calls_created_at",
             "idx_approvals_created_at",
             "idx_artifacts_created_at",
+            "idx_telemetry_created_at",
         ] {
             assert!(
                 names.contains(&required.to_owned()),
@@ -915,6 +1204,12 @@ mod tests {
                 ],
             )
             .expect("artifact should be inserted");
+        source
+            .record_startup_latency("ask", 120)
+            .expect("startup telemetry should be recorded");
+        source
+            .record_response_latency("ask", "openai", "gpt-4.1", 430, false, Some("timeout"))
+            .expect("response telemetry should be recorded");
 
         let exported_json = source
             .export_snapshot_json()
@@ -938,6 +1233,7 @@ mod tests {
         assert_eq!(actual.tool_calls, expected.tool_calls);
         assert_eq!(actual.approvals, expected.approvals);
         assert_eq!(actual.artifacts, expected.artifacts);
+        assert_eq!(actual.telemetry_events, expected.telemetry_events);
     }
 
     #[test]
@@ -982,6 +1278,44 @@ mod tests {
         assert!(snapshot.tool_calls.is_empty());
         assert!(snapshot.approvals.is_empty());
         assert!(snapshot.artifacts.is_empty());
+        assert!(snapshot.telemetry_events.is_empty());
+    }
+
+    #[test]
+    fn telemetry_summary_aggregates_latencies_and_error_categories() {
+        let db_path = temp_db_path("meow-state-telemetry-summary");
+        let store = StateStore::open(&db_path).expect("state store should open");
+
+        store
+            .record_startup_latency("tui", 90)
+            .expect("startup telemetry should be recorded");
+        store
+            .record_startup_latency("ask", 110)
+            .expect("startup telemetry should be recorded");
+        store
+            .record_response_latency("ask", "openai", "gpt-4.1", 300, true, None)
+            .expect("response telemetry should be recorded");
+        store
+            .record_response_latency("run", "openai", "gpt-4.1", 450, false, Some("timeout"))
+            .expect("response telemetry should be recorded");
+        store
+            .record_response_latency("chat", "anthropic", "claude", 210, true, None)
+            .expect("response telemetry should be recorded");
+
+        let summary = store
+            .telemetry_summary(7)
+            .expect("telemetry summary should be computed");
+
+        assert_eq!(summary.window_days, 7);
+        assert_eq!(summary.total_events, 5);
+        assert_eq!(summary.startup.count, 2);
+        assert_eq!(summary.startup.p95_ms, 110);
+        assert_eq!(summary.response.count, 3);
+        assert_eq!(summary.response_failures, 1);
+        assert_eq!(summary.response.p95_ms, 450);
+        assert_eq!(summary.error_categories.len(), 1);
+        assert_eq!(summary.error_categories[0].kind, "timeout");
+        assert_eq!(summary.error_categories[0].count, 1);
     }
 
     #[test]

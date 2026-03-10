@@ -6,6 +6,16 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Added
+- Runtime telemetry commands:
+  - `meow metrics summary [--days N]`
+  - `meow metrics export [--days N] [-o PATH]`
+- Persistent telemetry storage for startup latency, response latency, and categorized errors.
+- Weekly-window telemetry summary/export data model for operational reporting.
+
+### Changed
+- Runtime now records startup latency for command boot paths and response/error telemetry for `ask`, `run`, and TUI chat flows.
+
 ## [0.1.1] - 2026-03-10
 
 ### Changed

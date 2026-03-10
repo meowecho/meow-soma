@@ -21,7 +21,7 @@ fn root_help_lists_primary_commands() {
     assert!(output.status.success(), "expected success");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for command in ["ask", "run", "tool", "mcp", "session", "config"] {
+    for command in ["ask", "run", "tool", "mcp", "session", "config", "metrics"] {
         assert!(
             stdout.contains(command),
             "root help should list `{command}`"
@@ -108,6 +108,20 @@ fn config_help_lists_subcommands() {
         assert!(
             stdout.contains(command),
             "config help should list `{command}`"
+        );
+    }
+}
+
+#[test]
+fn metrics_help_lists_subcommands() {
+    let output = run_meow(&["metrics", "--help"]);
+    assert!(output.status.success(), "expected success");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for command in ["summary", "export"] {
+        assert!(
+            stdout.contains(command),
+            "metrics help should list `{command}`"
         );
     }
 }

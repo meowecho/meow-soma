@@ -1,6 +1,6 @@
 use std::env;
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -299,6 +299,7 @@ fn submit_prompt(
         .draw(|frame| ui.draw(frame))
         .context("failed to render thinking state")?;
     cancellation.clear();
+    let request_started = Instant::now();
 
     let stream_index = ui.push_assistant_streaming();
     let mut render_stream_chunk = |chunk: &str| -> Result<()> {
@@ -317,6 +318,7 @@ fn submit_prompt(
     ) {
         Ok(response) => {
             state.add_message(&ui.session_id, "assistant", &response.text)?;
+            record_response_telemetry(state, runtime, response.duration_ms, true, None, ui);
             ui.replace_transcript_content(stream_index, response.text);
             ui.push_activity(
                 "response",
@@ -326,6 +328,15 @@ fn submit_prompt(
         }
         Err(err) => {
             let message = err.to_string();
+            let error_kind = derive_error_kind_from_message(&message);
+            record_response_telemetry(
+                state,
+                runtime,
+                request_started.elapsed().as_millis(),
+                false,
+                Some(error_kind.as_str()),
+                ui,
+            );
             let has_partial = ui.transcript_entry_has_content(stream_index);
             if has_partial {
                 ui.append_to_transcript(stream_index, &format!("\n[error] {message}"));
@@ -690,6 +701,46 @@ fn load_bounded_context(
             content: item.content,
         })
         .collect())
+}
+
+fn record_response_telemetry(
+    state: &StateStore,
+    runtime: &RuntimeAgent,
+    duration_ms: u128,
+    success: bool,
+    error_kind: Option<&str>,
+    ui: &mut TuiState,
+) {
+    if let Err(err) = state.record_response_latency(
+        "chat",
+        runtime.provider_name(),
+        runtime.provider_model(),
+        duration_ms,
+        success,
+        error_kind,
+    ) {
+        ui.push_activity("telemetry", format!("failed to record chat metric: {err}"));
+    }
+}
+
+fn derive_error_kind_from_message(message: &str) -> String {
+    if let Some(idx) = message.find("kind=") {
+        let raw = &message[idx + 5..];
+        if let Some(kind) = raw
+            .split(|c: char| c.is_whitespace() || c == ')' || c == ',')
+            .next()
+            && !kind.is_empty()
+        {
+            return kind.to_owned();
+        }
+    }
+
+    let lowered = message.to_ascii_lowercase();
+    if lowered.contains("interrupted") {
+        "interrupted".to_owned()
+    } else {
+        "unknown".to_owned()
+    }
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {

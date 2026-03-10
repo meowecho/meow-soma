@@ -8,11 +8,13 @@ This backlog is prioritized for the next minor cycle after `v0.1.x`.
 - Scope: unify retry and timeout behavior between one-shot and streaming flows.
 - Acceptance: consistent retryability and error mapping for hosted/local providers.
 - Owner: runtime/provider maintainer.
+- Status: Done (2026-03-10)
 
 2. Launch telemetry implementation
 - Scope: add structured runtime counters for startup latency, response latency, and error categories.
 - Acceptance: metrics exportable for weekly reporting without manual log scraping.
 - Owner: runtime/state maintainer.
+- Status: Done (2026-03-10)
 
 ## P1
 
