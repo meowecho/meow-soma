@@ -41,6 +41,7 @@ This backlog is prioritized for the next minor cycle after `v0.1.x`.
 - Scope: add targeted diagnostics for auth/rate-limit/timeout failures.
 - Acceptance: actionable steps documented for top failure classes.
 - Owner: docs/provider maintainer.
+- Status: Done (2026-03-11)
 
 ## Intake Rule
 

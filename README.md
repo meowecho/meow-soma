@@ -102,6 +102,7 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 - Master plan: `docs/MEOWSOMA_MASTER_PLAN.md`
 - Detailed phase plan: `docs/PHASE_IMPLEMENTATION_PLAN.md`
 - Config responsibilities: `docs/CONFIG.md`
+- Provider troubleshooting runbook: `docs/PROVIDER_TROUBLESHOOTING.md`
 - Testing guide: `docs/TESTING.md`
 - Install guide (macOS/Linux): `docs/INSTALL.md`
 - Release process: `docs/RELEASE_PROCESS.md`
