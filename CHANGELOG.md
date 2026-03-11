@@ -12,9 +12,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - `meow metrics export [--days N] [-o PATH]`
 - Persistent telemetry storage for startup latency, response latency, and categorized errors.
 - Weekly-window telemetry summary/export data model for operational reporting.
+- MCP compatibility tests for malformed payload handling and request recovery, including validation of stable protocol error mapping across invalid request shapes.
 
 ### Changed
 - Runtime now records startup latency for command boot paths and response/error telemetry for `ask`, `run`, and TUI chat flows.
+- MCP request parsing now validates top-level payload shape and field types (`method`, `version`, `approve`) to return deterministic protocol errors while preserving follow-up request responsiveness.
 
 ## [0.1.1] - 2026-03-10
 

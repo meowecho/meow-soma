@@ -213,7 +213,17 @@ fn parse_request(line: &str, line_no: u64) -> std::result::Result<ParsedRequest,
         )
     })?;
 
-    let id = parse_optional_id(raw.get("id")).map_err(|message| {
+    let Some(raw_obj) = raw.as_object() else {
+        return Err((
+            None,
+            fallback_request_id(None, line_no),
+            "parse".to_owned(),
+            McpErrorCode::InvalidRequest,
+            "request payload must be a JSON object".to_owned(),
+        ));
+    };
+
+    let id = parse_optional_id(raw_obj.get("id")).map_err(|message| {
         (
             None,
             fallback_request_id(None, line_no),
@@ -224,7 +234,20 @@ fn parse_request(line: &str, line_no: u64) -> std::result::Result<ParsedRequest,
     })?;
     let request_id = fallback_request_id(id.as_deref(), line_no);
 
-    if let Some(version) = raw.get("version").and_then(Value::as_str)
+    let version = parse_optional_string_field(
+        raw_obj.get("version"),
+        "field 'version' must be a string when provided",
+    )
+    .map_err(|message| {
+        (
+            id.clone(),
+            request_id.clone(),
+            "parse".to_owned(),
+            McpErrorCode::InvalidRequest,
+            message,
+        )
+    })?;
+    if let Some(version) = version
         && version != MCP_PROTOCOL_VERSION
     {
         return Err((
@@ -236,13 +259,22 @@ fn parse_request(line: &str, line_no: u64) -> std::result::Result<ParsedRequest,
         ));
     }
 
-    if let Some(method) = raw.get("method").and_then(Value::as_str) {
-        let params = raw.get("params");
+    if let Some(method_value) = raw_obj.get("method") {
+        let method = method_value.as_str().ok_or_else(|| {
+            (
+                id.clone(),
+                request_id.clone(),
+                "parse".to_owned(),
+                McpErrorCode::InvalidRequest,
+                "field 'method' must be a string".to_owned(),
+            )
+        })?;
+        let params = raw_obj.get("params");
         return parse_method(id, request_id, method, params);
     }
 
-    if raw.get("tool").is_some() {
-        let tool = raw
+    if raw_obj.get("tool").is_some() {
+        let tool = raw_obj
             .get("tool")
             .and_then(Value::as_str)
             .map(str::to_owned)
@@ -256,7 +288,7 @@ fn parse_request(line: &str, line_no: u64) -> std::result::Result<ParsedRequest,
                 )
             })?;
 
-        let args = extract_args_array(raw.get("args")).map_err(|message| {
+        let args = extract_args_array(raw_obj.get("args")).map_err(|message| {
             (
                 id.clone(),
                 request_id.clone(),
@@ -265,7 +297,17 @@ fn parse_request(line: &str, line_no: u64) -> std::result::Result<ParsedRequest,
                 message,
             )
         })?;
-        let approve = raw.get("approve").and_then(Value::as_bool).unwrap_or(false);
+        let approve =
+            extract_optional_bool(raw_obj.get("approve"), "field 'approve' must be a boolean")
+                .map_err(|message| {
+                    (
+                        id.clone(),
+                        request_id.clone(),
+                        "tools/call".to_owned(),
+                        McpErrorCode::InvalidRequest,
+                        message,
+                    )
+                })?;
 
         return Ok(ParsedRequest {
             id,
@@ -349,10 +391,19 @@ fn parse_method(
                     message,
                 )
             })?;
-            let approve = params_obj
-                .get("approve")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
+            let approve = extract_optional_bool(
+                params_obj.get("approve"),
+                "params.approve must be a boolean",
+            )
+            .map_err(|message| {
+                (
+                    id.clone(),
+                    request_id.clone(),
+                    "tools/call".to_owned(),
+                    McpErrorCode::InvalidRequest,
+                    message,
+                )
+            })?;
 
             Ok(ParsedRequest {
                 id,
@@ -382,6 +433,28 @@ fn parse_optional_id(value: Option<&Value>) -> std::result::Result<Option<String
         Some(Value::Number(number)) => Ok(Some(number.to_string())),
         Some(Value::Bool(flag)) => Ok(Some(flag.to_string())),
         _ => Err("field 'id' must be string/number/bool/null".to_owned()),
+    }
+}
+
+fn parse_optional_string_field(
+    value: Option<&Value>,
+    error_message: &str,
+) -> std::result::Result<Option<String>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.to_owned())),
+        _ => Err(error_message.to_owned()),
+    }
+}
+
+fn extract_optional_bool(
+    value: Option<&Value>,
+    error_message: &str,
+) -> std::result::Result<bool, String> {
+    match value {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(flag)) => Ok(*flag),
+        _ => Err(error_message.to_owned()),
     }
 }
 
@@ -608,6 +681,31 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_version_returns_error_code() {
+        let mut call_tool = |_args: ToolExecArgs| -> Result<ToolOutput> {
+            Ok(ToolOutput {
+                status: "ok".to_owned(),
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        };
+        let mut list_tools = || Vec::<ToolSpec>::new();
+
+        let response = process_input_line(
+            r#"{"id":"ver","version":"meow.mcp.v0","method":"ping"}"#,
+            5,
+            &mut call_tool,
+            &mut list_tools,
+        );
+
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_ref().map(|item| item.code.as_str()),
+            Some("unsupported_version")
+        );
+    }
+
+    #[test]
     fn approval_required_is_mapped_to_protocol_error() {
         let mut call_tool = |_args: ToolExecArgs| -> Result<ToolOutput> {
             bail!("tool execution requires approval (outside allowlist) - re-run with --approve")
@@ -626,5 +724,186 @@ mod tests {
             response.error.as_ref().map(|item| item.code.as_str()),
             Some("approval_required")
         );
+    }
+
+    #[test]
+    fn non_object_payload_returns_invalid_request() {
+        let mut call_tool = |_args: ToolExecArgs| -> Result<ToolOutput> {
+            Ok(ToolOutput {
+                status: "ok".to_owned(),
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        };
+        let mut list_tools = || Vec::<ToolSpec>::new();
+
+        let response = process_input_line(r#"["ping"]"#, 6, &mut call_tool, &mut list_tools);
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_ref().map(|item| item.code.as_str()),
+            Some("invalid_request")
+        );
+        assert_eq!(response.meta.request_id, "line-6");
+        assert_eq!(
+            response.error.as_ref().map(|item| item.message.as_str()),
+            Some("request payload must be a JSON object")
+        );
+    }
+
+    #[test]
+    fn non_string_method_returns_invalid_request() {
+        let mut call_tool = |_args: ToolExecArgs| -> Result<ToolOutput> {
+            Ok(ToolOutput {
+                status: "ok".to_owned(),
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        };
+        let mut list_tools = || Vec::<ToolSpec>::new();
+
+        let response = process_input_line(
+            r#"{"id":"m1","method":123}"#,
+            7,
+            &mut call_tool,
+            &mut list_tools,
+        );
+
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_ref().map(|item| item.code.as_str()),
+            Some("invalid_request")
+        );
+        assert_eq!(response.meta.request_id, "m1");
+        assert_eq!(
+            response.error.as_ref().map(|item| item.message.as_str()),
+            Some("field 'method' must be a string")
+        );
+    }
+
+    #[test]
+    fn non_string_version_returns_invalid_request() {
+        let mut call_tool = |_args: ToolExecArgs| -> Result<ToolOutput> {
+            Ok(ToolOutput {
+                status: "ok".to_owned(),
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        };
+        let mut list_tools = || Vec::<ToolSpec>::new();
+
+        let response = process_input_line(
+            r#"{"id":"v1","version":1,"method":"ping"}"#,
+            8,
+            &mut call_tool,
+            &mut list_tools,
+        );
+
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_ref().map(|item| item.code.as_str()),
+            Some("invalid_request")
+        );
+        assert_eq!(response.meta.request_id, "v1");
+        assert_eq!(
+            response.error.as_ref().map(|item| item.message.as_str()),
+            Some("field 'version' must be a string when provided")
+        );
+    }
+
+    #[test]
+    fn non_boolean_approve_returns_invalid_request() {
+        let mut call_tool = |_args: ToolExecArgs| -> Result<ToolOutput> {
+            Ok(ToolOutput {
+                status: "ok".to_owned(),
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        };
+        let mut list_tools = || Vec::<ToolSpec>::new();
+
+        let response = process_input_line(
+            r#"{"id":"a1","method":"tools/call","params":{"tool":"echo","approve":"yes"}}"#,
+            9,
+            &mut call_tool,
+            &mut list_tools,
+        );
+
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_ref().map(|item| item.code.as_str()),
+            Some("invalid_request")
+        );
+        assert_eq!(response.meta.request_id, "a1");
+        assert_eq!(
+            response.error.as_ref().map(|item| item.message.as_str()),
+            Some("params.approve must be a boolean")
+        );
+    }
+
+    #[test]
+    fn legacy_non_boolean_approve_returns_invalid_request() {
+        let mut call_tool = |_args: ToolExecArgs| -> Result<ToolOutput> {
+            Ok(ToolOutput {
+                status: "ok".to_owned(),
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        };
+        let mut list_tools = || Vec::<ToolSpec>::new();
+
+        let response = process_input_line(
+            r#"{"id":"a2","tool":"echo","args":["ok"],"approve":"yes"}"#,
+            10,
+            &mut call_tool,
+            &mut list_tools,
+        );
+
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_ref().map(|item| item.code.as_str()),
+            Some("invalid_request")
+        );
+        assert_eq!(
+            response.error.as_ref().map(|item| item.message.as_str()),
+            Some("field 'approve' must be a boolean")
+        );
+    }
+
+    #[test]
+    fn malformed_request_does_not_break_followup_request() {
+        let mut call_count = 0;
+        let mut call_tool = |args: ToolExecArgs| -> Result<ToolOutput> {
+            call_count += 1;
+            Ok(ToolOutput {
+                status: "ok".to_owned(),
+                stdout: format!("{} {}", args.name, args.args.join(" "))
+                    .trim()
+                    .to_owned(),
+                stderr: String::new(),
+            })
+        };
+        let mut list_tools = || Vec::<ToolSpec>::new();
+
+        let bad_response = process_input_line(
+            r#"{"id":"bad","method":"tools/call","params":{"tool":"echo","approve":"true"}}"#,
+            10,
+            &mut call_tool,
+            &mut list_tools,
+        );
+        assert!(!bad_response.ok);
+        assert_eq!(
+            bad_response.error.as_ref().map(|item| item.code.as_str()),
+            Some("invalid_request")
+        );
+
+        let good_response = process_input_line(
+            r#"{"id":"good","method":"tools/call","params":{"tool":"echo","args":["hello"]}}"#,
+            11,
+            &mut call_tool,
+            &mut list_tools,
+        );
+        assert!(good_response.ok);
+        assert_eq!(good_response.id.as_deref(), Some("good"));
+        assert_eq!(call_count, 1);
     }
 }

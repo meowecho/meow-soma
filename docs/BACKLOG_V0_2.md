@@ -27,6 +27,7 @@ This backlog is prioritized for the next minor cycle after `v0.1.x`.
 - Scope: broaden test matrix for malformed payload and recovery behavior.
 - Acceptance: stable protocol errors and continued server responsiveness across cases.
 - Owner: mcp maintainer.
+- Status: Done (2026-03-11)
 
 3. TUI transcript performance for long sessions
 - Scope: optimize rendering and scroll behavior under large transcript volumes.
