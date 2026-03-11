@@ -777,6 +777,26 @@ struct HistorySearchState {
     cursor: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FeedRowCache {
+    width: u16,
+    rows: usize,
+}
+
+#[derive(Debug, Default)]
+struct FeedCache {
+    transcript_revision: u64,
+    status: String,
+    lines: Vec<Line<'static>>,
+    visual_rows: Option<FeedRowCache>,
+}
+
+#[derive(Debug)]
+struct PreparedFeed {
+    lines: Vec<Line<'static>>,
+    total_visual_rows: usize,
+}
+
 struct TuiState {
     session_id: String,
     profile: String,
@@ -786,6 +806,8 @@ struct TuiState {
     input: String,
     status: String,
     transcript: Vec<TranscriptEntry>,
+    transcript_revision: u64,
+    feed_cache: FeedCache,
     transcript_scroll: usize,
     activity: Vec<ActivityEntry>,
     history: Vec<String>,
@@ -809,6 +831,8 @@ impl TuiState {
             input: String::new(),
             status: "ready".to_owned(),
             transcript: Vec::new(),
+            transcript_revision: 0,
+            feed_cache: FeedCache::default(),
             transcript_scroll: 0,
             activity: Vec::new(),
             history: Vec::new(),
@@ -840,6 +864,7 @@ impl TuiState {
             content: String::new(),
         });
         self.enforce_transcript_bound();
+        self.mark_transcript_changed();
         let index = self.transcript.len().saturating_sub(1);
         self.scroll_transcript_bottom();
         index
@@ -855,12 +880,14 @@ impl TuiState {
             content,
         });
         self.enforce_transcript_bound();
+        self.mark_transcript_changed();
         self.scroll_transcript_bottom();
     }
 
     fn append_to_transcript(&mut self, index: usize, chunk: &str) {
         if let Some(entry) = self.transcript.get_mut(index) {
             entry.content.push_str(chunk);
+            self.mark_transcript_changed();
             self.scroll_transcript_bottom();
         }
     }
@@ -868,6 +895,7 @@ impl TuiState {
     fn replace_transcript_content(&mut self, index: usize, content: String) {
         if let Some(entry) = self.transcript.get_mut(index) {
             entry.content = content;
+            self.mark_transcript_changed();
             self.scroll_transcript_bottom();
         }
     }
@@ -881,6 +909,7 @@ impl TuiState {
     fn remove_transcript_entry(&mut self, index: usize) {
         if index < self.transcript.len() {
             self.transcript.remove(index);
+            self.mark_transcript_changed();
             self.transcript_scroll = self.transcript_scroll.min(self.transcript_max_scroll());
         }
     }
@@ -914,8 +943,13 @@ impl TuiState {
 
     fn clear_transcript(&mut self) {
         self.transcript.clear();
+        self.mark_transcript_changed();
         self.transcript_scroll = 0;
         self.pending_approval = None;
+    }
+
+    fn mark_transcript_changed(&mut self) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
     }
 
     fn remember_history(&mut self, value: &str) {
@@ -1136,7 +1170,7 @@ impl TuiState {
         self.transcript.is_empty()
     }
 
-    fn draw(&self, frame: &mut ratatui::Frame) {
+    fn draw(&mut self, frame: &mut ratatui::Frame) {
         let viewport = frame.area();
         let max_height = if self.transcript.is_empty() {
             viewport.height.min(MAX_DASHBOARD_HEIGHT_COMPACT)
@@ -1144,9 +1178,11 @@ impl TuiState {
             viewport.height
         };
         let hero_height = home_hero_height(max_height);
-        let max_feed_rows = max_height.saturating_sub(hero_height + 4).max(1);
+        let fixed_rows = hero_height.saturating_add(4);
+        let max_feed_rows = max_height.saturating_sub(fixed_rows).max(1);
         let feed_rows = self.desired_feed_rows(max_feed_rows, viewport.width);
-        let root_height = hero_height + feed_rows + 4;
+        let feed = self.prepare_feed(viewport.width);
+        let root_height = hero_height.saturating_add(feed_rows).saturating_add(4);
 
         let root = Rect {
             x: viewport.x,
@@ -1166,7 +1202,7 @@ impl TuiState {
             .split(root);
 
         self.draw_home(frame, home[0]);
-        self.draw_conversation_feed(frame, home[1]);
+        self.draw_conversation_feed(frame, home[1], feed);
         self.draw_input(frame, home[2]);
         self.draw_footer(frame, home[3]);
         if self.palette_open {
@@ -1174,28 +1210,65 @@ impl TuiState {
         }
     }
 
-    fn desired_feed_rows(&self, max_rows: u16, width: u16) -> u16 {
+    fn desired_feed_rows(&mut self, max_rows: u16, width: u16) -> u16 {
         if self.transcript.is_empty() {
             return 1;
         }
 
-        let total_rows = estimate_visual_line_rows(&self.feed_lines(), width).max(2);
-        total_rows.min(max_rows as usize) as u16
+        let total_rows = self.feed_visual_rows(width);
+        self.desired_feed_rows_from_total(max_rows, total_rows)
     }
 
-    fn feed_lines(&self) -> Vec<Line<'static>> {
-        let mut lines = self
-            .transcript
-            .iter()
-            .map(render_entry)
-            .collect::<Vec<Line>>();
+    fn desired_feed_rows_from_total(&self, max_rows: u16, total_rows: usize) -> u16 {
+        if self.transcript.is_empty() {
+            return 1;
+        }
+
+        let bounded = total_rows.max(2).min(usize::from(max_rows));
+        u16::try_from(bounded).unwrap_or(max_rows)
+    }
+
+    fn prepare_feed(&mut self, width: u16) -> PreparedFeed {
+        let total_visual_rows = self.feed_visual_rows(width);
+        PreparedFeed {
+            lines: self.feed_cache.lines.clone(),
+            total_visual_rows,
+        }
+    }
+
+    fn ensure_feed_cache_current(&mut self) {
+        if self.feed_cache.transcript_revision == self.transcript_revision
+            && self.feed_cache.status == self.status
+        {
+            return;
+        }
+
+        self.feed_cache.lines.clear();
+        self.feed_cache
+            .lines
+            .extend(self.transcript.iter().map(render_entry));
         if should_surface_status_in_feed(&self.status) {
-            lines.push(Line::from(Span::styled(
+            self.feed_cache.lines.push(Line::from(Span::styled(
                 format!("status: {}", self.status),
                 status_style(&self.status),
             )));
         }
-        lines
+        self.feed_cache.transcript_revision = self.transcript_revision;
+        self.feed_cache.status.clone_from(&self.status);
+        self.feed_cache.visual_rows = None;
+    }
+
+    fn feed_visual_rows(&mut self, width: u16) -> usize {
+        self.ensure_feed_cache_current();
+        if let Some(cached) = self.feed_cache.visual_rows
+            && cached.width == width
+        {
+            return cached.rows;
+        }
+
+        let rows = estimate_visual_line_rows(&self.feed_cache.lines, width);
+        self.feed_cache.visual_rows = Some(FeedRowCache { width, rows });
+        rows
     }
 
     fn draw_home(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -1292,22 +1365,20 @@ impl TuiState {
         frame.render_widget(right, columns[1]);
     }
 
-    fn draw_conversation_feed(&self, frame: &mut ratatui::Frame, area: Rect) {
+    fn draw_conversation_feed(&self, frame: &mut ratatui::Frame, area: Rect, feed: PreparedFeed) {
         if area.height == 0 {
             return;
         }
 
-        let lines = self.feed_lines();
-        let visible_rows = area.height.max(1) as usize;
-        let total_visual_rows = estimate_visual_line_rows(&lines, area.width);
-        let max_scroll = total_visual_rows.saturating_sub(visible_rows);
+        let visible_rows = usize::from(area.height.max(1));
+        let max_scroll = feed.total_visual_rows.saturating_sub(visible_rows);
         let scroll = compute_feed_scroll(
             self.transcript_scroll,
             self.transcript_max_scroll(),
             max_scroll,
         );
 
-        let conversation = Paragraph::new(lines)
+        let conversation = Paragraph::new(feed.lines)
             .scroll((scroll, 0))
             .style(Style::default().fg(THEME_TEXT).bg(THEME_BG))
             .wrap(Wrap { trim: false });
@@ -1508,12 +1579,18 @@ fn compute_feed_scroll(
     }
 }
 
+fn saturating_visual_row_total(rows: impl IntoIterator<Item = usize>) -> usize {
+    rows.into_iter()
+        .fold(0_usize, |total, row_count| total.saturating_add(row_count))
+}
+
 fn estimate_visual_line_rows(lines: &[Line<'_>], width: u16) -> usize {
-    let wrap_width = width.max(1) as usize;
-    lines
-        .iter()
-        .map(|line| line.width().max(1).div_ceil(wrap_width))
-        .sum()
+    let wrap_width = usize::from(width.max(1));
+    saturating_visual_row_total(
+        lines
+            .iter()
+            .map(|line| line.width().max(1).div_ceil(wrap_width)),
+    )
 }
 
 fn render_entry(entry: &TranscriptEntry) -> Line<'static> {
@@ -1740,16 +1817,85 @@ mod tests {
     }
 
     #[test]
+    fn feed_cache_invalidates_for_status_transcript_and_width_changes() {
+        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        state.push("you", "short line".to_owned());
+
+        let baseline_rows = state.feed_visual_rows(20);
+        assert_eq!(state.feed_cache.lines.len(), 1);
+        assert_eq!(
+            state.feed_cache.visual_rows,
+            Some(FeedRowCache {
+                width: 20,
+                rows: baseline_rows
+            })
+        );
+
+        state.status = "thinking...".to_owned();
+        let status_rows = state.feed_visual_rows(20);
+        assert!(status_rows >= baseline_rows);
+        assert_eq!(state.feed_cache.lines.len(), 2);
+        assert_eq!(state.feed_cache.status, "thinking...");
+
+        let revision_after_status = state.feed_cache.transcript_revision;
+        state.append_to_transcript(0, " plus more text");
+        let wider_rows = state.feed_visual_rows(40);
+        assert_ne!(state.feed_cache.transcript_revision, revision_after_status);
+        assert_eq!(
+            state.feed_cache.visual_rows,
+            Some(FeedRowCache {
+                width: 40,
+                rows: wider_rows
+            })
+        );
+        assert!(wider_rows <= state.feed_visual_rows(20));
+    }
+
+    #[test]
     fn compute_feed_scroll_follows_latest_when_at_bottom() {
         assert_eq!(compute_feed_scroll(10, 10, 5), 5);
         assert_eq!(compute_feed_scroll(3, 10, 5), 3);
         assert_eq!(compute_feed_scroll(8, 10, 5), 5);
+        assert_eq!(
+            compute_feed_scroll(usize::MAX, usize::MAX, usize::MAX),
+            u16::MAX
+        );
     }
 
     #[test]
     fn estimate_visual_line_rows_accounts_for_wrapping() {
         let lines = vec![Line::from("12345"), Line::from("123456789"), Line::from("")];
         assert_eq!(estimate_visual_line_rows(&lines, 5), 4);
+    }
+
+    #[test]
+    fn saturating_visual_row_total_clamps_on_overflow() {
+        let rows = saturating_visual_row_total([usize::MAX - 2, 10]);
+        assert_eq!(rows, usize::MAX);
+    }
+
+    #[test]
+    fn transcript_scroll_boundaries_are_stable() {
+        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        for idx in 0..5 {
+            state.push("you", idx.to_string());
+        }
+
+        state.scroll_transcript_top();
+        state.scroll_transcript_up(usize::MAX);
+        assert_eq!(state.transcript_scroll, 0);
+
+        state.scroll_transcript_down(usize::MAX);
+        assert_eq!(state.transcript_scroll, state.transcript_max_scroll());
+
+        state.scroll_transcript_down(usize::MAX);
+        assert_eq!(state.transcript_scroll, state.transcript_max_scroll());
+
+        state.scroll_transcript_up(2);
+        assert_eq!(
+            state.transcript_scroll,
+            state.transcript_max_scroll().saturating_sub(2)
+        );
     }
 
     #[test]

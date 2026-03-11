@@ -33,6 +33,7 @@ This backlog is prioritized for the next minor cycle after `v0.1.x`.
 - Scope: optimize rendering and scroll behavior under large transcript volumes.
 - Acceptance: no missing latest message, no overflow panics, stable scroll behavior.
 - Owner: tui/runtime maintainer.
+- Status: Done (2026-03-11)
 
 ## P2
 

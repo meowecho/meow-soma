@@ -17,6 +17,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### Changed
 - Runtime now records startup latency for command boot paths and response/error telemetry for `ask`, `run`, and TUI chat flows.
 - MCP request parsing now validates top-level payload shape and field types (`method`, `version`, `approve`) to return deterministic protocol errors while preserving follow-up request responsiveness.
+- TUI long-session transcript rendering now uses feed caching and width-aware row cache reuse to reduce repeated render work.
+- TUI feed row estimation and layout arithmetic now use saturating math to avoid overflow-driven instability during large transcript scenarios.
 
 ## [0.1.1] - 2026-03-10
 
