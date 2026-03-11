@@ -18,18 +18,13 @@ This backlog is prioritized for the next minor cycle after `v0.1.x`.
 
 ## P1
 
-1. CLI-level profile override for non-TUI flows
-- Scope: add `--profile` for `ask` and `run`.
-- Acceptance: profile selection is deterministic and reflected in run metadata.
-- Owner: cli/runtime maintainer.
-
-2. MCP client compatibility expansion
+1. MCP client compatibility expansion
 - Scope: broaden test matrix for malformed payload and recovery behavior.
 - Acceptance: stable protocol errors and continued server responsiveness across cases.
 - Owner: mcp maintainer.
 - Status: Done (2026-03-11)
 
-3. TUI transcript performance for long sessions
+2. TUI transcript performance for long sessions
 - Scope: optimize rendering and scroll behavior under large transcript volumes.
 - Acceptance: no missing latest message, no overflow panics, stable scroll behavior.
 - Owner: tui/runtime maintainer.
