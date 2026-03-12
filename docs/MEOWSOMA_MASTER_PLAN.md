@@ -109,4 +109,4 @@ Failure scenarios:
 ## Immediate Next Steps
 1. Execute `docs/LAUNCH_CHECKLIST.md` and publish `v0.1.0`
 2. Run label sync workflow and confirm `Triage Guard` enforcement from `docs/TRIAGE_SLA.md` in first usage window
-3. Capture 24h/72h metrics reports using `docs/METRICS_BASELINE.md` and `docs/reports/v0.1.0-metrics-baseline.md`
+3. Capture 24h/72h metrics snapshots using `docs/METRICS_BASELINE.md` and publish the summary in GitHub release operations tracking (issue/discussion/milestone notes)

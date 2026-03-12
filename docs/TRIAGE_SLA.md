@@ -84,7 +84,7 @@ those values into labels.
 
 ## First Usage Window Report
 
-Within 72 hours of launch, publish a summary in `docs/reports/` including:
+Within 72 hours of launch, publish a summary in the GitHub release/operations channel (for example: release discussion, tracking issue, or milestone note) including:
 
 - Open issues by severity
 - Mean response time vs SLA

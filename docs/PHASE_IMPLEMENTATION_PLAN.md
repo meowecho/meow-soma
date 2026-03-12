@@ -359,7 +359,6 @@ Current status:
     - `docs/METRICS_BASELINE.md`
     - `docs/PATCH_RELEASE_WORKFLOW.md`
     - `docs/BACKLOG_V0_2.md`
-    - `docs/reports/v0.1.0-metrics-baseline.md`
   - Incident/bug issue templates, label sync, and triage guard workflows added:
     - `.github/ISSUE_TEMPLATE/incident.yml`
     - `.github/ISSUE_TEMPLATE/bug-report.yml`
@@ -368,7 +367,7 @@ Current status:
     - `.github/workflows/triage-guard.yml`
 - Remaining execution:
   - Publish `v0.1.0`
-  - Produce first 24h/72h triage + metrics reports
+  - Produce first 24h/72h triage + metrics summaries in GitHub release operations tracking
 
 Objective:
 - Ship the target release and stabilize based on real usage feedback.

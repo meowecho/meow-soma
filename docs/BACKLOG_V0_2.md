@@ -36,6 +36,8 @@ This backlog is prioritized for the next minor cycle after `v0.1.x`.
 - Scope: reduce manual steps in release notes and post-release report generation.
 - Acceptance: repeatable runbook with minimal manual edits.
 - Owner: operator.
+- Status: Canceled (2026-03-12)
+- Reason: release notes source of truth moved to GitHub Releases; reports/release-docs automation is no longer in active scope.
 
 2. Additional provider troubleshooting guide
 - Scope: add targeted diagnostics for auth/rate-limit/timeout failures.
