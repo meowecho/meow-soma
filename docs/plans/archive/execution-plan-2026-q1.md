@@ -1,4 +1,6 @@
-# Meow-Soma Phase Implementation Plan
+# Meow-Soma Phase Implementation Plan (Archived: 2026 Q1)
+
+Archived from `docs/plans/execution-plan.md` on 2026-03-12.
 
 This document is execution-focused and handoff-ready.
 It defines what must be built, how to verify completion, and what output is required per phase.
@@ -358,7 +360,7 @@ Current status:
     - `docs/TRIAGE_SLA.md`
     - `docs/METRICS_BASELINE.md`
     - `docs/PATCH_RELEASE_WORKFLOW.md`
-    - `docs/BACKLOG_V0_2.md`
+    - `docs/plans/archive/backlog-2026-q1.md`
   - Incident/bug issue templates, label sync, and triage guard workflows added:
     - `.github/ISSUE_TEMPLATE/incident.yml`
     - `.github/ISSUE_TEMPLATE/bug-report.yml`
@@ -386,7 +388,7 @@ Implementation tasks:
 Deliverables:
 - v0.1.0 release.
 - Post-launch incident and patch workflow.
-- Prioritized backlog for v0.2.
+- Prioritized backlog for next cycle.
 
 Definition of done:
 - v0.1.x release published with installation and operational docs.

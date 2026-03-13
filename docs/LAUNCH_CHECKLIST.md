@@ -54,4 +54,4 @@ Rollback should be triggered if any of the following occurs:
 - [ ] Confirm no unresolved P0 issues
 - [ ] Confirm mitigation plan for any open P1 issues
 - [ ] Cut patch release if needed using `docs/PATCH_RELEASE_WORKFLOW.md`
-- [ ] Refresh prioritized next-cycle items in `docs/BACKLOG_V0_2.md`
+- [ ] Refresh prioritized next-cycle items in `docs/plans/backlog.md`

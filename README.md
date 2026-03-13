@@ -99,8 +99,8 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 
 - Runtime config template: `config/meow.example.toml`
 - Local dev config (state in repo): `config/dev.local.toml`
-- Master plan: `docs/MEOWSOMA_MASTER_PLAN.md`
-- Detailed phase plan: `docs/PHASE_IMPLEMENTATION_PLAN.md`
+- Roadmap: `docs/plans/roadmap.md`
+- Detailed phase plan: `docs/plans/execution-plan.md`
 - Config responsibilities: `docs/CONFIG.md`
 - Provider troubleshooting runbook: `docs/PROVIDER_TROUBLESHOOTING.md`
 - Testing guide: `docs/TESTING.md`
@@ -111,7 +111,7 @@ This repository now includes a working Rust CLI scaffold with command name `meow
 - Triage and SLA: `docs/TRIAGE_SLA.md`
 - Metrics baseline: `docs/METRICS_BASELINE.md`
 - Patch workflow: `docs/PATCH_RELEASE_WORKFLOW.md`
-- Next-minor backlog: `docs/BACKLOG_V0_2.md`
+- Next-minor backlog: `docs/plans/backlog.md`
 - Changelog: `CHANGELOG.md`
 - Contributor/agent collaboration guide: `AGENTS.md`
 

@@ -1,6 +1,8 @@
-# v0.2 Prioritized Backlog
+# Prioritized Backlog (Archived: 2026 Q1)
 
-This backlog is prioritized for the next minor cycle after `v0.1.x`.
+Archived from `docs/plans/backlog.md` on 2026-03-12.
+
+This backlog is prioritized for the next product cycle.
 
 ## P0
 
@@ -53,4 +55,4 @@ New work should be appended with:
 - Problem statement
 - Acceptance criteria
 - Owner
-- Target release (`0.2.0` or `0.2.x`)
+- Target release or cycle

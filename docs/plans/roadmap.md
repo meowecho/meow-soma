@@ -1,4 +1,4 @@
-# Meow-Soma Master Plan
+# Meow-Soma Roadmap
 
 ## Goal
 Build `meow-soma` as a Rust CLI with command name `meow` that unifies:
@@ -11,7 +11,7 @@ Multi-agent is used only for development workflow via Codex CLI config.
 
 ## Execution Source of Truth
 - High-level roadmap: this file
-- Detailed phase-by-phase implementation: `docs/PHASE_IMPLEMENTATION_PLAN.md`
+- Detailed phase-by-phase implementation: `docs/plans/execution-plan.md`
 - Contributor and agent operating rules: `AGENTS.md`
 
 ## Locked Decisions
@@ -107,6 +107,6 @@ Failure scenarios:
   - Mitigation: provider trait boundary + adapter isolation
 
 ## Immediate Next Steps
-1. Execute `docs/LAUNCH_CHECKLIST.md` and publish `v0.1.0`
-2. Run label sync workflow and confirm `Triage Guard` enforcement from `docs/TRIAGE_SLA.md` in first usage window
-3. Capture 24h/72h metrics snapshots using `docs/METRICS_BASELINE.md` and publish the summary in GitHub release operations tracking (issue/discussion/milestone notes)
+1. Define current-cycle execution phases in `docs/plans/execution-plan.md`
+2. Add and prioritize incoming work in `docs/plans/backlog.md`
+3. Promote top-priority backlog items into the active execution phases with explicit owner and target

@@ -13,7 +13,7 @@ It is the source of truth for development workflow, role boundaries, and quality
 
 ## Collaboration Goals
 
-- Keep implementation aligned with roadmap and phase plan in `docs/PHASE_IMPLEMENTATION_PLAN.md`
+- Keep implementation aligned with roadmap and phase plan in `docs/plans/execution-plan.md`
 - Preserve runtime/dev config separation
 - Ship incrementally with explicit acceptance criteria per phase
 - Avoid hidden decisions by documenting assumptions in PR descriptions and commit messages
@@ -56,7 +56,7 @@ Operational rules:
 
 1. Intake
 - Restate the request and impacted modules.
-- Link the task to a phase from `docs/PHASE_IMPLEMENTATION_PLAN.md`.
+- Link the task to a phase from `docs/plans/execution-plan.md`.
 
 2. Plan
 - Produce a decision-complete implementation plan.
