@@ -8,6 +8,7 @@ Archived completed cycle: `docs/plans/archive/backlog-2026-q1.md`.
 - Status: Active (started 2026-03-15)
 - Backlog baseline: -
 - Goal: collect candidate features first, then pick implementation slices.
+- Current-cycle scope (selected): P0-1 CLI Session Lifecycle, P0-2 Slash Command Surface, P0-3 Instruction Memory, P0-5 Permission Modes/Rules.
 - Runtime guardrail: single-agent runtime remains the target architecture; runtime multi-agent cowork stays deferred unless explicitly approved.
 
 ## P0
@@ -17,7 +18,7 @@ Archived completed cycle: `docs/plans/archive/backlog-2026-q1.md`.
 - Scope: close gaps in command/flag parity for core session lifecycle and non-interactive scripting workflows.
 - Acceptance criteria: users can start, continue, resume by id/name, fork sessions, and run print mode for automation with predictable behavior.
 - Owner: cli/runtime maintainer
-- Status: Planned
+- Status: Selected
 - Target release or cycle: current cycle
 
 2. Built-in Slash Command Surface Parity
@@ -25,7 +26,7 @@ Archived completed cycle: `docs/plans/archive/backlog-2026-q1.md`.
 - Scope: inventory and implement missing high-value built-ins and aliases in a consistent `/` command UX.
 - Acceptance criteria: `/` shows full command list with filtering, and implemented commands behave consistently across sessions.
 - Owner: cli/tui maintainer
-- Status: Planned
+- Status: Selected
 - Target release or cycle: current cycle
 
 3. Instruction Memory System Parity (project instruction-file style)
@@ -33,7 +34,7 @@ Archived completed cycle: `docs/plans/archive/backlog-2026-q1.md`.
 - Scope: implement scoped instruction loading, nested discovery, rule files, import syntax, and `/init` + `/memory` workflows.
 - Acceptance criteria: effective instruction precedence is visible, project/user/local scopes work, and memory can be audited/edited in-session.
 - Owner: runtime/config maintainer
-- Status: Planned
+- Status: Selected
 - Target release or cycle: current cycle
 
 4. Auto Memory and Learning Parity
@@ -49,7 +50,7 @@ Archived completed cycle: `docs/plans/archive/backlog-2026-q1.md`.
 - Scope: implement robust permission mode switching and rule matching for tool names + specifiers with deterministic first-match semantics.
 - Acceptance criteria: rule evaluation order is deterministic, risky actions respect mode/rules, and deny/ask/allow behavior is test-covered.
 - Owner: policy/runtime maintainer
-- Status: Planned
+- Status: Selected
 - Target release or cycle: current cycle
 
 6. Sandboxing and Filesystem/Network Controls
