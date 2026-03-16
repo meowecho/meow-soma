@@ -3,6 +3,10 @@
 **Pronunciation:** /ˈso.ma/ (Greek) · /ˈsoʊmə/ (English)  
 *(soh-ma / soh-muh)*
 
+<p align="center">
+  <img src=".github/assets/readme/meow-soma.gif" alt="Meow Soma TUI Demo" width="1100" />
+</p>
+
 ---
 
 ## Meow Soma – The Body of Intelligence

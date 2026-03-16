@@ -2,3 +2,4 @@
 /.meow-soma-dev
 /tmp
 /dist
+.DS_Store
