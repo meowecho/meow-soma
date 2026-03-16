@@ -6,6 +6,17 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Added
+- TUI slash-command registry with canonical command metadata (usage, aliases, help text) for consistent command dispatch.
+- New `/status` slash command to show current runtime/session summary in the chat feed.
+- Command-suggestion behavior for unknown slash commands, including prefix and typo-tolerant matching hints.
+
+### Changed
+- Slash-command handling now resolves aliases through a single registry (for example `/model`, `/tools`, `/commands`, `/q`).
+- Command palette now uses the same slash-command registry as runtime dispatch for consistent discoverability and execution.
+- Command palette filtering now supports slash-prefixed search input (for example `/pro`).
+- TUI command documentation now reflects the expanded slash-command surface and alias set.
+
 ## [0.2.0] - 2026-03-13
 
 ### Added

@@ -59,14 +59,133 @@ const MASCOT_FRAMES: [[&str; 5]; 4] = [
         "      _// \\\\_",
     ],
 ];
-const PALETTE_ITEMS: &[(&str, &str, &str)] = &[
-    ("Help", "/help", "Show slash commands and shortcuts"),
-    ("New Session", "/new", "Start a fresh conversation session"),
-    ("Session Info", "/session", "Show current session id"),
-    ("Provider Info", "/provider", "Show active provider/model"),
-    ("Clear Chat", "/clear", "Clear chat feed"),
-    ("List Tools", "/tool", "Show available tools"),
-    ("Exit", "/quit", "Exit Meow Soma"),
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlashCommandId {
+    Help,
+    Home,
+    Palette,
+    Clear,
+    Session,
+    Provider,
+    Profile,
+    New,
+    Tool,
+    Status,
+    Quit,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SlashCommandSpec {
+    id: SlashCommandId,
+    name: &'static str,
+    aliases: &'static [&'static str],
+    usage: &'static str,
+    summary: &'static str,
+    palette_label: &'static str,
+    palette_visible: bool,
+}
+
+const SLASH_COMMANDS: &[SlashCommandSpec] = &[
+    SlashCommandSpec {
+        id: SlashCommandId::Help,
+        name: "help",
+        aliases: &["h", "commands"],
+        usage: "/help",
+        summary: "Show available slash commands",
+        palette_label: "Help",
+        palette_visible: true,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Home,
+        name: "home",
+        aliases: &["dashboard"],
+        usage: "/home",
+        summary: "Return focus to home dashboard",
+        palette_label: "Home",
+        palette_visible: true,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Palette,
+        name: "palette",
+        aliases: &["pal"],
+        usage: "/palette",
+        summary: "Open command palette",
+        palette_label: "Command Palette",
+        palette_visible: false,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Clear,
+        name: "clear",
+        aliases: &["cls"],
+        usage: "/clear",
+        summary: "Clear transcript feed",
+        palette_label: "Clear Chat",
+        palette_visible: true,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Session,
+        name: "session",
+        aliases: &["sid"],
+        usage: "/session",
+        summary: "Show current session id",
+        palette_label: "Session Info",
+        palette_visible: true,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Provider,
+        name: "provider",
+        aliases: &["model"],
+        usage: "/provider",
+        summary: "Show active provider/model",
+        palette_label: "Provider Info",
+        palette_visible: true,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Profile,
+        name: "profile",
+        aliases: &["persona"],
+        usage: "/profile <name>",
+        summary: "Switch runtime profile",
+        palette_label: "Switch Profile",
+        palette_visible: false,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::New,
+        name: "new",
+        aliases: &["reset"],
+        usage: "/new [title]",
+        summary: "Start a fresh conversation session",
+        palette_label: "New Session",
+        palette_visible: true,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Tool,
+        name: "tool",
+        aliases: &["tools"],
+        usage: "/tool [name ...]",
+        summary: "List tools or run one tool",
+        palette_label: "Tools",
+        palette_visible: true,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Status,
+        name: "status",
+        aliases: &["state"],
+        usage: "/status",
+        summary: "Show live TUI/runtime status summary",
+        palette_label: "Runtime Status",
+        palette_visible: true,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Quit,
+        name: "quit",
+        aliases: &["exit", "q"],
+        usage: "/quit",
+        summary: "Exit Meow Soma",
+        palette_label: "Exit",
+        palette_visible: true,
+    },
 ];
 
 pub fn run_tui(
@@ -366,47 +485,48 @@ fn handle_slash_command(
 ) -> Result<bool> {
     let (cmd, args) = parse_slash_command(prompt);
     let cmd = cmd.to_ascii_lowercase();
+    let command = resolve_slash_command(if cmd.is_empty() { "help" } else { &cmd });
 
-    match cmd.as_str() {
-        "quit" | "exit" => {
+    match command.map(|spec| spec.id) {
+        Some(SlashCommandId::Quit) => {
             ui.status = "exiting".to_owned();
             ui.push_activity("command", "/quit".to_owned());
             Ok(true)
         }
-        "help" => {
-            ui.status =
-                "commands: /help /home /clear /session /provider /profile <name> /new [title] /tool [name ...] /quit".to_owned();
+        Some(SlashCommandId::Help) => {
+            ui.push("status", format_slash_help());
+            ui.status = "slash help loaded".to_owned();
             ui.push_activity("command", "/help".to_owned());
             Ok(false)
         }
-        "home" => {
+        Some(SlashCommandId::Home) => {
             ui.status = "home dashboard".to_owned();
             ui.push_activity("command", "/home".to_owned());
             Ok(false)
         }
-        "palette" => {
+        Some(SlashCommandId::Palette) => {
             ui.open_palette();
             ui.status = "command palette".to_owned();
             ui.push_activity("command", "/palette".to_owned());
             Ok(false)
         }
-        "clear" => {
+        Some(SlashCommandId::Clear) => {
             ui.clear_transcript();
             ui.status = "conversation cleared".to_owned();
             ui.push_activity("command", "/clear".to_owned());
             Ok(false)
         }
-        "session" => {
+        Some(SlashCommandId::Session) => {
             ui.status = format!("session {}", ui.session_id);
             ui.push_activity("command", "/session".to_owned());
             Ok(false)
         }
-        "provider" | "model" => {
+        Some(SlashCommandId::Provider) => {
             ui.status = format!("provider {}", ui.provider);
-            ui.push_activity("command", format!("/{cmd}"));
+            ui.push_activity("command", "/provider".to_owned());
             Ok(false)
         }
-        "profile" => {
+        Some(SlashCommandId::Profile) => {
             if args.is_empty() {
                 ui.status = "usage: /profile <name>".to_owned();
                 ui.push_activity("command", "invalid /profile usage".to_owned());
@@ -417,7 +537,7 @@ fn handle_slash_command(
             ui.push_activity("command", format!("/profile {}", ui.profile));
             Ok(false)
         }
-        "new" => {
+        Some(SlashCommandId::New) => {
             let title = if args.is_empty() {
                 Some("tui")
             } else {
@@ -430,10 +550,42 @@ fn handle_slash_command(
             ui.push_activity("session", "started new session".to_owned());
             Ok(false)
         }
-        "tool" => run_tool_from_slash(ui, state, policy, tools, args),
-        _ => {
-            ui.status = format!("unknown command: /{cmd}");
-            ui.push_activity("error", format!("unknown command /{cmd}"));
+        Some(SlashCommandId::Tool) => run_tool_from_slash(ui, state, policy, tools, args),
+        Some(SlashCommandId::Status) => {
+            let pending = if ui.pending_approval.is_some() {
+                "yes"
+            } else {
+                "no"
+            };
+            ui.push(
+                "status",
+                format!(
+                    "session={} | provider={} | profile={} | transcript_entries={} | pending_approval={}",
+                    ui.session_id,
+                    ui.provider,
+                    ui.profile,
+                    ui.transcript.len(),
+                    pending
+                ),
+            );
+            ui.status = "status loaded".to_owned();
+            ui.push_activity("command", "/status".to_owned());
+            Ok(false)
+        }
+        None => {
+            let suggestions = suggest_slash_commands(&cmd, 3);
+            if suggestions.is_empty() {
+                ui.status = format!("unknown command: /{cmd}");
+                ui.push_activity("error", format!("unknown command /{cmd}"));
+            } else {
+                let hint = suggestions
+                    .iter()
+                    .map(|name| format!("/{name}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                ui.status = format!("unknown command: /{cmd} (try {hint})");
+                ui.push_activity("error", format!("unknown command /{cmd} -> {hint}"));
+            }
             Ok(false)
         }
     }
@@ -468,7 +620,7 @@ fn handle_palette_key(
                 return Ok(false);
             };
             ui.close_palette();
-            handle_slash_command(ui, state, policy, tools, command)
+            handle_slash_command(ui, state, policy, tools, &command)
         }
         KeyCode::Up => {
             ui.palette_prev();
@@ -677,6 +829,132 @@ fn record_tool_and_render(
 
 fn parse_tool_args(raw: &str) -> Vec<String> {
     raw.split_whitespace().map(ToOwned::to_owned).collect()
+}
+
+fn resolve_slash_command(name: &str) -> Option<&'static SlashCommandSpec> {
+    let normalized = name.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    SLASH_COMMANDS.iter().find(|spec| {
+        spec.name == normalized || spec.aliases.iter().any(|alias| *alias == normalized)
+    })
+}
+
+fn format_slash_help() -> String {
+    let mut lines = Vec::with_capacity(SLASH_COMMANDS.len() + 1);
+    lines.push("available slash commands:".to_owned());
+
+    for spec in SLASH_COMMANDS {
+        let alias_suffix = if spec.aliases.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " (aliases: {})",
+                spec.aliases
+                    .iter()
+                    .map(|alias| format!("/{alias}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        lines.push(format!(
+            "- {}: {}{}",
+            spec.usage, spec.summary, alias_suffix
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn suggest_slash_commands(raw: &str, limit: usize) -> Vec<&'static str> {
+    let needle = raw.trim().to_ascii_lowercase();
+    if needle.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    let mut prefix_matches = SLASH_COMMANDS
+        .iter()
+        .filter(|spec| {
+            spec.name.starts_with(&needle)
+                || spec.aliases.iter().any(|alias| alias.starts_with(&needle))
+        })
+        .map(|spec| spec.name)
+        .collect::<Vec<_>>();
+    prefix_matches.sort_unstable();
+    prefix_matches.dedup();
+    if !prefix_matches.is_empty() {
+        prefix_matches.truncate(limit);
+        return prefix_matches;
+    }
+
+    let mut fuzzy = SLASH_COMMANDS
+        .iter()
+        .flat_map(|spec| {
+            let mut pairs = Vec::with_capacity(spec.aliases.len() + 1);
+            pairs.push((levenshtein_distance(&needle, spec.name), spec.name));
+            for alias in spec.aliases {
+                pairs.push((levenshtein_distance(&needle, alias), spec.name));
+            }
+            pairs
+        })
+        .collect::<Vec<_>>();
+    fuzzy.sort_by(|(dist_a, name_a), (dist_b, name_b)| {
+        dist_a.cmp(dist_b).then_with(|| name_a.cmp(name_b))
+    });
+
+    let mut suggestions = Vec::new();
+    for (distance, name) in fuzzy {
+        if distance > 3 {
+            break;
+        }
+        if suggestions.contains(&name) {
+            continue;
+        }
+        suggestions.push(name);
+        if suggestions.len() == limit {
+            break;
+        }
+    }
+
+    suggestions
+}
+
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    if a == b {
+        return 0;
+    }
+    if a.is_empty() {
+        return b.chars().count();
+    }
+    if b.is_empty() {
+        return a.chars().count();
+    }
+
+    let b_chars = b.chars().collect::<Vec<_>>();
+    let mut prev_row = (0..=b_chars.len()).collect::<Vec<_>>();
+    let mut row = vec![0; b_chars.len() + 1];
+
+    for (i, a_char) in a.chars().enumerate() {
+        row[0] = i + 1;
+        for (j, b_char) in b_chars.iter().enumerate() {
+            let cost = if a_char == *b_char { 0 } else { 1 };
+            row[j + 1] = (row[j] + 1)
+                .min(prev_row[j + 1] + 1)
+                .min(prev_row[j] + cost);
+        }
+        prev_row.clone_from_slice(&row);
+    }
+
+    prev_row[b_chars.len()]
+}
+
+fn palette_specs() -> Vec<&'static SlashCommandSpec> {
+    SLASH_COMMANDS
+        .iter()
+        .filter(|spec| spec.palette_visible)
+        .collect()
 }
 
 fn parse_slash_command(raw: &str) -> (&str, &str) {
@@ -1115,22 +1393,28 @@ impl TuiState {
         self.palette_cursor = (self.palette_cursor + 1) % len;
     }
 
-    fn selected_palette_command(&self) -> Option<&'static str> {
+    fn selected_palette_command(&self) -> Option<String> {
         let matches = self.palette_matches();
         let selected = matches.get(self.palette_cursor)?;
-        Some(PALETTE_ITEMS[*selected].1)
+        let items = palette_specs();
+        let command = items.get(*selected)?;
+        Some(format!("/{}", command.name))
     }
 
     fn palette_matches(&self) -> Vec<usize> {
-        let filter = self.palette_filter.trim().to_ascii_lowercase();
-        PALETTE_ITEMS
+        let filter = self
+            .palette_filter
+            .trim()
+            .trim_start_matches('/')
+            .to_ascii_lowercase();
+        palette_specs()
             .iter()
             .enumerate()
             .filter(|(_, item)| {
                 filter.is_empty()
-                    || item.0.to_ascii_lowercase().contains(&filter)
-                    || item.1.to_ascii_lowercase().contains(&filter)
-                    || item.2.to_ascii_lowercase().contains(&filter)
+                    || item.palette_label.to_ascii_lowercase().contains(&filter)
+                    || item.name.to_ascii_lowercase().contains(&filter)
+                    || item.summary.to_ascii_lowercase().contains(&filter)
             })
             .map(|(idx, _)| idx)
             .collect()
@@ -1462,6 +1746,7 @@ impl TuiState {
 
         frame.render_widget(Clear, area);
 
+        let items = palette_specs();
         let matches = self.palette_matches();
         let mut lines = Vec::new();
         lines.push(Line::from(vec![
@@ -1491,7 +1776,7 @@ impl TuiState {
             };
             for (visible_idx, item_idx) in matches.iter().enumerate().skip(start).take(max_visible)
             {
-                let item = PALETTE_ITEMS[*item_idx];
+                let item = items[*item_idx];
                 let selected = visible_idx == self.palette_cursor;
                 let marker = if selected { ">" } else { " " };
                 let style = if selected {
@@ -1503,8 +1788,8 @@ impl TuiState {
                 };
 
                 lines.push(Line::from(vec![
-                    Span::styled(format!("{marker} {} ", item.0), style),
-                    Span::styled(item.1.to_owned(), Style::default().fg(THEME_MUTED)),
+                    Span::styled(format!("{marker} {} ", item.palette_label), style),
+                    Span::styled(format!("/{}", item.name), Style::default().fg(THEME_MUTED)),
                 ]));
             }
         }
@@ -1735,6 +2020,39 @@ mod tests {
     }
 
     #[test]
+    fn slash_registry_resolves_aliases() {
+        assert_eq!(
+            resolve_slash_command("model").map(|spec| spec.id),
+            Some(SlashCommandId::Provider)
+        );
+        assert_eq!(
+            resolve_slash_command("tools").map(|spec| spec.id),
+            Some(SlashCommandId::Tool)
+        );
+        assert_eq!(
+            resolve_slash_command("q").map(|spec| spec.id),
+            Some(SlashCommandId::Quit)
+        );
+    }
+
+    #[test]
+    fn slash_help_includes_status_and_aliases() {
+        let help = format_slash_help();
+        assert!(help.contains("/status"));
+        assert!(help.contains("/model"));
+        assert!(help.contains("/tools"));
+    }
+
+    #[test]
+    fn slash_suggestions_cover_prefix_and_fuzzy_matches() {
+        let prefix = suggest_slash_commands("pro", 3);
+        assert_eq!(prefix, vec!["profile", "provider"]);
+
+        let fuzzy = suggest_slash_commands("provder", 3);
+        assert!(fuzzy.contains(&"provider"));
+    }
+
+    #[test]
     fn history_navigation_roundtrip() {
         let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
         state.remember_history("first");
@@ -1777,7 +2095,22 @@ mod tests {
         state.palette_push('o');
 
         let selected = state.selected_palette_command();
-        assert_eq!(selected, Some("/provider"));
+        assert_eq!(selected.as_deref(), Some("/provider"));
+    }
+
+    #[test]
+    fn palette_supports_slash_prefixed_filter_and_skips_profile() {
+        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        state.open_palette();
+        for ch in "/pro".chars() {
+            state.palette_push(ch);
+        }
+
+        let selected = state.selected_palette_command();
+        assert_eq!(selected.as_deref(), Some("/provider"));
+
+        let has_profile = palette_specs().iter().any(|spec| spec.name == "profile");
+        assert!(!has_profile);
     }
 
     #[test]

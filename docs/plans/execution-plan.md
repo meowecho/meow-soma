@@ -21,7 +21,7 @@ Archived completed cycle: `docs/plans/archive/execution-plan-2026-q1.md`.
 
 | Phase | Goal | Status | Owner | Target |
 |---|---|---|---|---|
-| 1 | Built-in slash command surface expansion | Planned | cli/tui maintainer | current cycle |
+| 1 | Built-in slash command surface expansion | Done | cli/tui maintainer | current cycle |
 | 2 | Instruction memory system (project/user/local) | Planned | runtime/config maintainer | current cycle |
 | 3 | Permission modes and rule engine hardening | Planned | policy/runtime maintainer | current cycle |
 | 4 | CLI session lifecycle parity (resume/fork/headless) | Planned | cli/runtime maintainer | current cycle |
@@ -31,7 +31,7 @@ Archived completed cycle: `docs/plans/archive/execution-plan-2026-q1.md`.
 ### Phase 1 - Built-in Slash Command Surface Expansion
 
 Status:
-- Planned
+- Done
 
 Objective:
 - Improve command discoverability and in-session control for TUI users.
@@ -58,6 +58,11 @@ Deliverables:
 Definition of done:
 - Slash command discovery is complete and consistent.
 - Built-ins targeted for this phase are available and test-covered.
+
+Completion notes:
+- Implemented canonical slash-command registry and alias resolution in TUI command dispatch.
+- Added `/status` command, unknown-command suggestions, and shared registry usage in command palette.
+- Added/updated unit tests for aliases, suggestions, and slash-prefixed palette filtering.
 
 Verification commands:
 - `cargo fmt --check`

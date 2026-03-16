@@ -195,7 +195,7 @@ Notes:
 - Send: `Enter`
 - Streaming: assistant output renders chunk-by-chunk in chat feed
 - Exit: `Esc`, `Ctrl+C`, `/quit`
-- Slash commands: `/help`, `/home`, `/clear`, `/session`, `/provider`, `/profile <name>`, `/new [title]`, `/tool [name ...]`, `/palette`
+- Slash commands: `/help`, `/home`, `/clear`, `/session`, `/provider`, `/profile <name>`, `/new [title]`, `/tool [name ...]`, `/status`, `/palette`, `/quit` (aliases include `/commands`, `/model`, `/tools`, `/exit`, `/q`)
 - History: `Up` / `Down`
 - History search: `Ctrl+R` (cycle matching command history)
 - Command palette: `Ctrl+P` (filter + run quick commands)
