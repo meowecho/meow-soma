@@ -209,6 +209,7 @@ const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     },
 ];
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_tui(
     state: &StateStore,
     policy: &PolicyEngine,
@@ -2321,18 +2322,9 @@ mod tests {
 
     #[test]
     fn init_flag_parser_supports_force_and_rejects_unknown_tokens() {
-        assert_eq!(
-            parse_init_force_flag("").expect("empty args should parse"),
-            false
-        );
-        assert_eq!(
-            parse_init_force_flag("--force").expect("force args should parse"),
-            true
-        );
-        assert_eq!(
-            parse_init_force_flag("-f").expect("short force args should parse"),
-            true
-        );
+        assert!(!parse_init_force_flag("").expect("empty args should parse"));
+        assert!(parse_init_force_flag("--force").expect("force args should parse"));
+        assert!(parse_init_force_flag("-f").expect("short force args should parse"));
         let err = parse_init_force_flag("--unknown").expect_err("unexpected args should fail");
         assert!(err.contains("unexpected argument"));
     }

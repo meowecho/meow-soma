@@ -195,22 +195,19 @@ pub fn resolve_instruction_paths(config: &MeowConfig, cwd: &Path) -> Result<Inst
 }
 
 fn load_snapshot(paths: &InstructionPaths) -> Result<InstructionSnapshot> {
-    let mut scopes = Vec::with_capacity(3);
-    scopes.push(load_scope_snapshot(
-        InstructionScope::User,
-        &paths.user,
-        None,
-    )?);
-    scopes.push(load_scope_snapshot(
-        InstructionScope::Local,
-        &paths.local,
-        Some(&paths.project_root),
-    )?);
-    scopes.push(load_scope_snapshot(
-        InstructionScope::Project,
-        &paths.project,
-        Some(&paths.project_root),
-    )?);
+    let scopes = vec![
+        load_scope_snapshot(InstructionScope::User, &paths.user, None)?,
+        load_scope_snapshot(
+            InstructionScope::Local,
+            &paths.local,
+            Some(&paths.project_root),
+        )?,
+        load_scope_snapshot(
+            InstructionScope::Project,
+            &paths.project,
+            Some(&paths.project_root),
+        )?,
+    ];
 
     let effective_instructions = render_effective_instructions(&scopes);
 
