@@ -14,6 +14,7 @@ use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
+use crate::memory::{InitProjectOutcome, InstructionMemory, InstructionScope};
 use crate::policy::PolicyEngine;
 use crate::runtime::{
     CancellationToken, ContextMessage, RuntimeAgent, RuntimeExecutionContext, RuntimeOperation,
@@ -64,6 +65,8 @@ const MASCOT_FRAMES: [[&str; 5]; 4] = [
 enum SlashCommandId {
     Help,
     Home,
+    Init,
+    Memory,
     Palette,
     Clear,
     Session,
@@ -103,6 +106,24 @@ const SLASH_COMMANDS: &[SlashCommandSpec] = &[
         usage: "/home",
         summary: "Return focus to home dashboard",
         palette_label: "Home",
+        palette_visible: true,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Init,
+        name: "init",
+        aliases: &["bootstrap"],
+        usage: "/init [--force]",
+        summary: "Initialize the project instruction memory file",
+        palette_label: "Init Instruction Memory",
+        palette_visible: true,
+    },
+    SlashCommandSpec {
+        id: SlashCommandId::Memory,
+        name: "memory",
+        aliases: &["mem"],
+        usage: "/memory [status|show|paths|reload]",
+        summary: "Inspect and reload instruction memory scopes",
+        palette_label: "Memory Status",
         palette_visible: true,
     },
     SlashCommandSpec {
@@ -193,6 +214,7 @@ pub fn run_tui(
     policy: &PolicyEngine,
     tools: &ToolRegistry,
     runtime: &RuntimeAgent,
+    instruction_memory: InstructionMemory,
     profile_name: &str,
     context_window: usize,
     cancellation: &CancellationToken,
@@ -200,7 +222,12 @@ pub fn run_tui(
     let session_id = state.create_session(Some("tui"))?;
     let provider = format!("{}:{}", runtime.provider_name(), runtime.provider_model());
 
-    let mut ui = TuiState::new(session_id.clone(), profile_name.to_owned(), provider);
+    let mut ui = TuiState::new(
+        session_id.clone(),
+        profile_name.to_owned(),
+        provider,
+        instruction_memory,
+    );
 
     let stdout = io::stdout();
     enable_raw_mode().context("failed to enable raw mode")?;
@@ -398,7 +425,19 @@ fn submit_prompt(
 
     ui.remember_history(&prompt);
 
-    let context_messages = load_bounded_context(state, &ui.session_id, context_window)?;
+    if let Err(err) = ui.instruction_memory.reload() {
+        ui.push_activity(
+            "memory",
+            format!("failed to refresh instruction memory before prompt: {err}"),
+        );
+    }
+
+    let context_messages = load_bounded_context(
+        state,
+        &ui.session_id,
+        context_window,
+        &ui.instruction_memory,
+    )?;
     let runtime_context = RuntimeExecutionContext::new(
         RuntimeOperation::Chat,
         ui.profile.as_str(),
@@ -504,6 +543,8 @@ fn handle_slash_command(
             ui.push_activity("command", "/home".to_owned());
             Ok(false)
         }
+        Some(SlashCommandId::Init) => handle_init_slash(ui, args),
+        Some(SlashCommandId::Memory) => handle_memory_slash(ui, args),
         Some(SlashCommandId::Palette) => {
             ui.open_palette();
             ui.status = "command palette".to_owned();
@@ -557,15 +598,19 @@ fn handle_slash_command(
             } else {
                 "no"
             };
+            let memory_status = format_memory_scope_status(&ui.instruction_memory);
+            let memory_paths = format_memory_path_status(&ui.instruction_memory);
             ui.push(
                 "status",
                 format!(
-                    "session={} | provider={} | profile={} | transcript_entries={} | pending_approval={}",
+                    "session={} | provider={} | profile={} | transcript_entries={} | pending_approval={} | memory={}\n{}",
                     ui.session_id,
                     ui.provider,
                     ui.profile,
                     ui.transcript.len(),
-                    pending
+                    pending,
+                    memory_status,
+                    memory_paths,
                 ),
             );
             ui.status = "status loaded".to_owned();
@@ -589,6 +634,192 @@ fn handle_slash_command(
             Ok(false)
         }
     }
+}
+
+fn handle_init_slash(ui: &mut TuiState, args: &str) -> Result<bool> {
+    let force = match parse_init_force_flag(args) {
+        Ok(force) => force,
+        Err(message) => {
+            ui.status = message.clone();
+            ui.push_activity("command", "invalid /init usage".to_owned());
+            ui.push_error(message);
+            return Ok(false);
+        }
+    };
+
+    match ui.instruction_memory.init_project_file(force) {
+        Ok(result) => {
+            match result.outcome {
+                InitProjectOutcome::Created => {
+                    ui.push(
+                        "status",
+                        format!(
+                            "initialized project instruction file: {}",
+                            result.path.display()
+                        ),
+                    );
+                    ui.status = "project memory initialized".to_owned();
+                }
+                InitProjectOutcome::Overwritten => {
+                    ui.push(
+                        "status",
+                        format!(
+                            "overwrote project instruction file: {}",
+                            result.path.display()
+                        ),
+                    );
+                    ui.status = "project memory overwritten".to_owned();
+                }
+                InitProjectOutcome::AlreadyExists => {
+                    ui.push(
+                        "status",
+                        format!(
+                            "project instruction file already exists: {} (use /init --force)",
+                            result.path.display()
+                        ),
+                    );
+                    ui.status = "project memory already initialized".to_owned();
+                }
+            }
+            ui.push_activity(
+                "command",
+                format!("/init{}", if force { " --force" } else { "" }),
+            );
+        }
+        Err(err) => {
+            ui.push_error(format!("failed to initialize project memory: {err}"));
+            ui.status = "memory init failed".to_owned();
+            ui.push_activity("error", format!("memory init failed: {err}"));
+        }
+    }
+
+    Ok(false)
+}
+
+fn handle_memory_slash(ui: &mut TuiState, args: &str) -> Result<bool> {
+    let command = args
+        .split_whitespace()
+        .next()
+        .unwrap_or("status")
+        .to_ascii_lowercase();
+
+    match command.as_str() {
+        "" | "status" => {
+            ui.push(
+                "status",
+                format!(
+                    "memory precedence: user < local < project\nscopes: {}\n{}",
+                    format_memory_scope_status(&ui.instruction_memory),
+                    format_memory_path_status(&ui.instruction_memory),
+                ),
+            );
+            ui.status = "memory status loaded".to_owned();
+            ui.push_activity("command", "/memory status".to_owned());
+        }
+        "show" => {
+            if let Some(block) = ui.instruction_memory.effective_context_block() {
+                ui.push("status", block);
+            } else {
+                ui.push(
+                    "status",
+                    "no instruction memory loaded (create one with /init)".to_owned(),
+                );
+            }
+            ui.status = "memory content loaded".to_owned();
+            ui.push_activity("command", "/memory show".to_owned());
+        }
+        "paths" => {
+            ui.push("status", format_memory_path_status(&ui.instruction_memory));
+            ui.status = "memory paths loaded".to_owned();
+            ui.push_activity("command", "/memory paths".to_owned());
+        }
+        "reload" => match ui.instruction_memory.reload() {
+            Ok(()) => {
+                ui.push(
+                    "status",
+                    format!(
+                        "memory reloaded: {}",
+                        format_memory_scope_status(&ui.instruction_memory)
+                    ),
+                );
+                ui.status = "memory reloaded".to_owned();
+                ui.push_activity("command", "/memory reload".to_owned());
+            }
+            Err(err) => {
+                ui.push_error(format!("memory reload failed: {err}"));
+                ui.status = "memory reload failed".to_owned();
+                ui.push_activity("error", format!("memory reload failed: {err}"));
+            }
+        },
+        _ => {
+            ui.push(
+                "status",
+                "usage: /memory [status|show|paths|reload]".to_owned(),
+            );
+            ui.status = "invalid /memory usage".to_owned();
+            ui.push_activity("command", "invalid /memory usage".to_owned());
+        }
+    }
+
+    Ok(false)
+}
+
+fn parse_init_force_flag(args: &str) -> std::result::Result<bool, String> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+
+    let mut force = false;
+    for token in trimmed.split_whitespace() {
+        match token {
+            "--force" | "-f" | "force" => force = true,
+            _ => {
+                return Err(format!(
+                    "usage: /init [--force] (unexpected argument: {token})"
+                ));
+            }
+        }
+    }
+
+    Ok(force)
+}
+
+fn format_memory_scope_status(memory: &InstructionMemory) -> String {
+    let loaded_scopes = memory.snapshot().loaded_scope_count();
+    let scope_states = memory
+        .snapshot()
+        .scopes
+        .iter()
+        .map(|scope| format!("{}={}", scope.scope, scope.status_label()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("loaded_scopes={loaded_scopes}; {scope_states}")
+}
+
+fn format_memory_path_status(memory: &InstructionMemory) -> String {
+    let paths = memory.paths();
+    [
+        format_scope_path_status(memory, InstructionScope::User, &paths.user),
+        format_scope_path_status(memory, InstructionScope::Local, &paths.local),
+        format_scope_path_status(memory, InstructionScope::Project, &paths.project),
+    ]
+    .join(" | ")
+}
+
+fn format_scope_path_status(
+    memory: &InstructionMemory,
+    scope: InstructionScope,
+    path: &std::path::Path,
+) -> String {
+    let status = memory
+        .snapshot()
+        .scopes
+        .iter()
+        .find(|item| item.scope == scope)
+        .map(|item| item.status_label())
+        .unwrap_or("missing");
+    format!("{scope}={} ({status})", path.display())
 }
 
 fn handle_palette_key(
@@ -970,15 +1201,29 @@ fn load_bounded_context(
     state: &StateStore,
     session_id: &str,
     context_window: usize,
+    instruction_memory: &InstructionMemory,
 ) -> Result<Vec<ContextMessage>> {
-    let messages = state.get_recent_messages(session_id, context_window)?;
-    Ok(messages
-        .into_iter()
-        .map(|item| ContextMessage {
-            role: item.role,
-            content: item.content,
+    let mut context_messages = instruction_memory
+        .effective_context_block()
+        .map(|content| {
+            vec![ContextMessage {
+                role: "instruction_memory".to_owned(),
+                content,
+            }]
         })
-        .collect())
+        .unwrap_or_default();
+
+    context_messages.extend(
+        state
+            .get_recent_messages(session_id, context_window)?
+            .into_iter()
+            .map(|item| ContextMessage {
+                role: item.role,
+                content: item.content,
+            }),
+    );
+
+    Ok(context_messages)
 }
 
 fn record_response_telemetry(
@@ -1076,6 +1321,7 @@ struct PreparedFeed {
 }
 
 struct TuiState {
+    instruction_memory: InstructionMemory,
     session_id: String,
     profile: String,
     provider: String,
@@ -1099,8 +1345,14 @@ struct TuiState {
 }
 
 impl TuiState {
-    fn new(session_id: String, profile: String, provider: String) -> Self {
+    fn new(
+        session_id: String,
+        profile: String,
+        provider: String,
+        instruction_memory: InstructionMemory,
+    ) -> Self {
         Self {
+            instruction_memory,
             session_id,
             profile,
             provider,
@@ -1975,6 +2227,19 @@ fn home_hero_height(total_height: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::InstructionPaths;
+    use uuid::Uuid;
+
+    fn test_instruction_memory() -> InstructionMemory {
+        let root = std::env::temp_dir().join(format!("meow-tui-memory-{}", Uuid::new_v4()));
+        InstructionMemory::from_paths(InstructionPaths {
+            user: root.join("user.md"),
+            local: root.join("local.md"),
+            project: root.join("project.md"),
+            project_root: root,
+        })
+        .expect("test instruction memory should load")
+    }
 
     #[test]
     fn render_entry_prefixes_role() {
@@ -1996,7 +2261,12 @@ mod tests {
 
     #[test]
     fn transcript_is_bounded() {
-        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
         for idx in 0..450 {
             state.push("you", format!("{idx}"));
         }
@@ -2030,6 +2300,10 @@ mod tests {
             Some(SlashCommandId::Tool)
         );
         assert_eq!(
+            resolve_slash_command("mem").map(|spec| spec.id),
+            Some(SlashCommandId::Memory)
+        );
+        assert_eq!(
             resolve_slash_command("q").map(|spec| spec.id),
             Some(SlashCommandId::Quit)
         );
@@ -2039,8 +2313,28 @@ mod tests {
     fn slash_help_includes_status_and_aliases() {
         let help = format_slash_help();
         assert!(help.contains("/status"));
+        assert!(help.contains("/memory"));
         assert!(help.contains("/model"));
+        assert!(help.contains("/mem"));
         assert!(help.contains("/tools"));
+    }
+
+    #[test]
+    fn init_flag_parser_supports_force_and_rejects_unknown_tokens() {
+        assert_eq!(
+            parse_init_force_flag("").expect("empty args should parse"),
+            false
+        );
+        assert_eq!(
+            parse_init_force_flag("--force").expect("force args should parse"),
+            true
+        );
+        assert_eq!(
+            parse_init_force_flag("-f").expect("short force args should parse"),
+            true
+        );
+        let err = parse_init_force_flag("--unknown").expect_err("unexpected args should fail");
+        assert!(err.contains("unexpected argument"));
     }
 
     #[test]
@@ -2054,7 +2348,12 @@ mod tests {
 
     #[test]
     fn history_navigation_roundtrip() {
-        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
         state.remember_history("first");
         state.remember_history("second");
 
@@ -2073,7 +2372,12 @@ mod tests {
 
     #[test]
     fn history_search_cycles_matching_entries() {
-        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
         state.remember_history("build project");
         state.remember_history("git status");
         state.remember_history("git diff");
@@ -2088,11 +2392,17 @@ mod tests {
 
     #[test]
     fn palette_filters_and_selects_command() {
-        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
         state.open_palette();
         state.palette_push('p');
         state.palette_push('r');
         state.palette_push('o');
+        state.palette_push('v');
 
         let selected = state.selected_palette_command();
         assert_eq!(selected.as_deref(), Some("/provider"));
@@ -2100,9 +2410,14 @@ mod tests {
 
     #[test]
     fn palette_supports_slash_prefixed_filter_and_skips_profile() {
-        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
         state.open_palette();
-        for ch in "/pro".chars() {
+        for ch in "/prov".chars() {
             state.palette_push(ch);
         }
 
@@ -2131,7 +2446,12 @@ mod tests {
 
     #[test]
     fn desired_feed_rows_reserves_space_for_status_line() {
-        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
         state.push("you", "first".to_owned());
         state.push("meow", "second".to_owned());
         state.status = "ok | 100 ms".to_owned();
@@ -2141,7 +2461,12 @@ mod tests {
 
     #[test]
     fn desired_feed_rows_grows_for_wrapped_lines_before_scroll() {
-        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
         state.push("you", "this is a long line that wraps".to_owned());
         state.push("meow", "another long line that wraps".to_owned());
         state.status = "ok | 100 ms".to_owned();
@@ -2151,7 +2476,12 @@ mod tests {
 
     #[test]
     fn feed_cache_invalidates_for_status_transcript_and_width_changes() {
-        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
         state.push("you", "short line".to_owned());
 
         let baseline_rows = state.feed_visual_rows(20);
@@ -2209,7 +2539,12 @@ mod tests {
 
     #[test]
     fn transcript_scroll_boundaries_are_stable() {
-        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
         for idx in 0..5 {
             state.push("you", idx.to_string());
         }
@@ -2249,7 +2584,12 @@ mod tests {
 
     #[test]
     fn mascot_animation_cycles_frames() {
-        let mut state = TuiState::new("s".to_owned(), "default".to_owned(), "p".to_owned());
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
         assert_eq!(state.mascot_frame_index(), 0);
 
         state.advance_animation();

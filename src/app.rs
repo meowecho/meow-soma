@@ -13,9 +13,12 @@ use crate::cli::{
 };
 use crate::config;
 use crate::mcp;
+use crate::memory::InstructionMemory;
 use crate::policy::PolicyEngine;
 use crate::providers::build_provider;
-use crate::runtime::{CancellationToken, RuntimeAgent, RuntimeExecutionContext, RuntimeOperation};
+use crate::runtime::{
+    CancellationToken, ContextMessage, RuntimeAgent, RuntimeExecutionContext, RuntimeOperation,
+};
 use crate::state::StateStore;
 use crate::tools::{ToolOutput, ToolRegistry};
 use crate::tui;
@@ -52,16 +55,27 @@ pub fn run(cli: Cli) -> Result<()> {
                     &policy,
                     &tools,
                     &runtime,
+                    load_instruction_memory(&cfg)?,
                     &profile_name,
                     context_window,
                     &cancellation,
                 ),
-                Some(Commands::Ask(args)) => {
-                    run_ask(&state, &runtime, &profile_name, &cancellation, &args.prompt)
-                }
-                Some(Commands::Run(args)) => {
-                    run_goal(&state, &runtime, &profile_name, &cancellation, &args.goal)
-                }
+                Some(Commands::Ask(args)) => run_ask(
+                    &state,
+                    &runtime,
+                    &load_instruction_memory(&cfg)?,
+                    &profile_name,
+                    &cancellation,
+                    &args.prompt,
+                ),
+                Some(Commands::Run(args)) => run_goal(
+                    &state,
+                    &runtime,
+                    &load_instruction_memory(&cfg)?,
+                    &profile_name,
+                    &cancellation,
+                    &args.goal,
+                ),
                 Some(Commands::Tool { command }) => {
                     run_tool_command(&state, &policy, &tools, command)
                 }
@@ -79,6 +93,7 @@ pub fn run(cli: Cli) -> Result<()> {
 fn run_ask(
     state: &StateStore,
     runtime: &RuntimeAgent,
+    instruction_memory: &InstructionMemory,
     profile_name: &str,
     cancellation: &CancellationToken,
     prompt: &str,
@@ -90,7 +105,7 @@ fn run_ask(
         RuntimeOperation::Ask,
         profile_name,
         Some(session_id.clone()),
-        Vec::new(),
+        build_instruction_context_messages(instruction_memory),
     );
 
     cancellation.clear();
@@ -136,12 +151,17 @@ fn run_ask(
 fn run_goal(
     state: &StateStore,
     runtime: &RuntimeAgent,
+    instruction_memory: &InstructionMemory,
     profile_name: &str,
     cancellation: &CancellationToken,
     goal: &str,
 ) -> Result<()> {
-    let runtime_context =
-        RuntimeExecutionContext::new(RuntimeOperation::Run, profile_name, None, Vec::new());
+    let runtime_context = RuntimeExecutionContext::new(
+        RuntimeOperation::Run,
+        profile_name,
+        None,
+        build_instruction_context_messages(instruction_memory),
+    );
 
     cancellation.clear();
     let request_started = Instant::now();
@@ -623,6 +643,25 @@ fn ensure_storage_dirs(cfg: &config::MeowConfig) -> Result<()> {
             .with_context(|| format!("failed to create storage directory: {}", path.display()))?;
     }
     Ok(())
+}
+
+fn load_instruction_memory(cfg: &config::MeowConfig) -> Result<InstructionMemory> {
+    let cwd = std::env::current_dir().context("failed to determine current working directory")?;
+    InstructionMemory::load(cfg, &cwd)
+}
+
+fn build_instruction_context_messages(
+    instruction_memory: &InstructionMemory,
+) -> Vec<ContextMessage> {
+    instruction_memory
+        .effective_context_block()
+        .map(|content| {
+            vec![ContextMessage {
+                role: "instruction_memory".to_owned(),
+                content,
+            }]
+        })
+        .unwrap_or_default()
 }
 
 fn truncate_display(value: &str, max_chars: usize) -> String {

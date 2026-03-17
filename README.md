@@ -133,14 +133,23 @@ cargo run -- --config config/dev.local.toml ask "hello"
 - Send: `Enter`
 - Exit: `Esc`, `Ctrl+C`, `/quit`
 - Slash commands:
-  - `/help`, `/home`, `/clear`, `/session`, `/provider`, `/profile <name>`, `/new [title]`, `/tool [name ...]`, `/status`, `/palette`, `/quit`
-  - Aliases include `/commands`, `/model`, `/tools`, `/exit`, `/q`
+  - `/help`, `/home`, `/init [--force]`, `/memory [status|show|paths|reload]`, `/clear`, `/session`, `/provider`, `/profile <name>`, `/new [title]`, `/tool [name ...]`, `/status`, `/palette`, `/quit`
+  - Aliases include `/commands`, `/model`, `/tools`, `/mem`, `/bootstrap`, `/exit`, `/q`
 - History: `Up` / `Down`
 - History search: `Ctrl+R`
 - Command palette: `Ctrl+P`
 - Scroll transcript: `PgUp` / `PgDn`, `Home`, `End`
 - Clear input/transcript: `Ctrl+U` / `Ctrl+L`
 - Inline approval for risky `/tool` actions: `y/yes` or `n/no`
+
+## Instruction Memory
+
+- Effective prompt instructions are loaded with deterministic precedence: `user < local < project`.
+- Default memory file locations:
+  - User scope: `~/.meow-soma/memory/instructions.md` (or `storage.memory_dir/instructions.md`)
+  - Local scope: `<project-root>/.meow-soma/instructions.local.md`
+  - Project scope: `<project-root>/.meow-soma/instructions.md`
+- Use `/init` to create the project file and `/memory reload` to pick up file edits without restarting TUI.
 
 ## Safety Model
 

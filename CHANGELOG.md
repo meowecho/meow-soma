@@ -10,12 +10,23 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - TUI slash-command registry with canonical command metadata (usage, aliases, help text) for consistent command dispatch.
 - New `/status` slash command to show current runtime/session summary in the chat feed.
 - Command-suggestion behavior for unknown slash commands, including prefix and typo-tolerant matching hints.
+- Deterministic instruction memory loader with `user`, `local`, and `project` scopes and precedence `user < local < project`.
+- New TUI slash commands for instruction memory workflows:
+  - `/init [--force]` to initialize project instruction file
+  - `/memory status|show|paths|reload` to inspect and reload effective memory without restarting TUI
+- Memory status output now reports resolved scope file paths and load states for user/local/project scopes.
+- Unit coverage for instruction precedence, project init/force behavior, and reload behavior.
 
 ### Changed
 - Slash-command handling now resolves aliases through a single registry (for example `/model`, `/tools`, `/commands`, `/q`).
 - Command palette now uses the same slash-command registry as runtime dispatch for consistent discoverability and execution.
 - Command palette filtering now supports slash-prefixed search input (for example `/pro`).
 - TUI command documentation now reflects the expanded slash-command surface and alias set.
+- `ask`, `run`, and TUI chat now inject effective instruction memory into prompt context before recent conversation context.
+- TUI now refreshes instruction memory before each prompt so file edits are applied without restarting the session.
+
+### Fixed
+- Hardened instruction-memory file safety checks to reject symlinked parent directories and path traversal outside the project root during both load and `/init --force`.
 
 ## [0.2.0] - 2026-03-13
 

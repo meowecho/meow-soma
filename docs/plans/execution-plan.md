@@ -22,7 +22,7 @@ Archived completed cycle: `docs/plans/archive/execution-plan-2026-q1.md`.
 | Phase | Goal | Status | Owner | Target |
 |---|---|---|---|---|
 | 1 | Built-in slash command surface expansion | Done | cli/tui maintainer | current cycle |
-| 2 | Instruction memory system (project/user/local) | Planned | runtime/config maintainer | current cycle |
+| 2 | Instruction memory system (project/user/local) | Done | runtime/config maintainer | current cycle |
 | 3 | Permission modes and rule engine hardening | Planned | policy/runtime maintainer | current cycle |
 | 4 | CLI session lifecycle parity (resume/fork/headless) | Planned | cli/runtime maintainer | current cycle |
 
@@ -75,7 +75,7 @@ Known risks:
 ### Phase 2 - Instruction Memory System
 
 Status:
-- Planned
+- Done
 
 Objective:
 - Provide stable instruction hierarchy for better response consistency across sessions.
@@ -110,6 +110,12 @@ Verification commands:
 
 Known risks:
 - Unexpected instruction precedence; mitigate with explicit order and fixture tests.
+
+Completion notes:
+- Added deterministic instruction-memory scopes (`user`, `local`, `project`) with precedence `user < local < project`.
+- Added TUI memory workflows: `/init [--force]` and `/memory status|show|paths|reload`.
+- `ask`, `run`, and TUI chat now inject effective instruction memory into prompt context before recent conversation history.
+- Added unit coverage for precedence, project init/force behavior, and reload behavior.
 
 ### Phase 3 - Permission Modes and Rule Engine Hardening
 

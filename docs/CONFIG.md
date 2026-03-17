@@ -38,6 +38,17 @@ Retry and timeout:
 - Retryable errors include timeout, rate-limit, and most server-side failures
 - `runtime.max_steps` is used as the bounded recent-context window size for TUI chat/run prompt context loading
 
+Instruction memory scopes:
+- `storage.memory_dir` is the user-scope instruction root (`storage.memory_dir/instructions.md`)
+- Project root resolution uses nearest existing project memory file, then nearest `.git` ancestor, then current working directory fallback
+- Local scope file: `<project-root>/.meow-soma/instructions.local.md`
+- Project scope file: `<project-root>/.meow-soma/instructions.md`
+- Effective precedence is deterministic: `user < local < project` (project is highest specificity)
+- `ask`, `run`, and TUI chat inject the effective instruction block into prompt context before conversation history
+- TUI slash commands:
+  - `/init [--force]` initializes the project instruction file
+  - `/memory status|show|paths|reload` inspects and reloads instruction memory without restarting TUI
+
 Security/runtime policy details:
 - Policy decisions are classified as `allow`, `approve_required`, or `deny`
 - Approval audit rows persist both human-readable reason and machine-readable `reason_code`
