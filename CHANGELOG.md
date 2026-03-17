@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-17
+
 ### Added
 - Session lifecycle commands:
   - `meow session continue <session>` to resume an existing session directly in TUI
