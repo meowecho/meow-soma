@@ -356,15 +356,18 @@ fn run_loop(
                         }
                     }
                     KeyCode::Backspace => {
+                        ui.clear_slash_completion();
                         ui.input.pop();
                         ui.history_cursor = None;
                         ui.clear_history_search();
                     }
                     KeyCode::Up => {
+                        ui.clear_slash_completion();
                         ui.history_prev();
                         ui.clear_history_search();
                     }
                     KeyCode::Down => {
+                        ui.clear_slash_completion();
                         ui.history_next();
                         ui.clear_history_search();
                     }
@@ -376,14 +379,28 @@ fn run_loop(
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             continue;
                         }
+                        ui.clear_slash_completion();
                         ui.input.push(ch);
                         ui.history_cursor = None;
                         ui.clear_history_search();
                     }
                     KeyCode::Tab => {
-                        ui.input.push('\t');
-                        ui.history_cursor = None;
-                        ui.clear_history_search();
+                        let reverse = key.modifiers.contains(KeyModifiers::SHIFT);
+                        if !ui.autocomplete_slash_command(reverse) {
+                            ui.clear_slash_completion();
+                            if ui.input.trim_start().starts_with('/') {
+                                ui.status = "no command autocomplete candidates".to_owned();
+                            } else {
+                                ui.input.push('\t');
+                                ui.history_cursor = None;
+                                ui.clear_history_search();
+                            }
+                        }
+                    }
+                    KeyCode::BackTab => {
+                        if !ui.autocomplete_slash_command(true) {
+                            ui.status = "no command autocomplete candidates".to_owned();
+                        }
                     }
                     _ => {}
                 }
@@ -1153,6 +1170,56 @@ fn suggest_slash_commands(raw: &str, limit: usize) -> Vec<&'static str> {
     suggestions
 }
 
+fn slash_completion_seed(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    let body = trimmed.strip_prefix('/')?;
+    if body.is_empty() {
+        return Some(String::new());
+    }
+    if body.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(body.to_ascii_lowercase())
+}
+
+fn slash_completion_matches(seed: &str) -> Vec<&'static str> {
+    let mut matches = Vec::new();
+    for spec in SLASH_COMMANDS {
+        let seed_matches = seed.is_empty()
+            || spec.name.starts_with(seed)
+            || spec.aliases.iter().any(|alias| alias.starts_with(seed));
+        if seed_matches && !matches.contains(&spec.name) {
+            matches.push(spec.name);
+        }
+    }
+    matches.sort_unstable();
+    matches
+}
+
+fn format_slash_completion_choices(matches: &[String]) -> String {
+    matches.join(", ")
+}
+
+fn slash_hint_specs(input: &str, limit: usize) -> Vec<&'static SlashCommandSpec> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    let Some(seed) = slash_completion_seed(input) else {
+        return Vec::new();
+    };
+    let names = slash_completion_matches(&seed);
+    if names.is_empty() {
+        return Vec::new();
+    }
+
+    names
+        .into_iter()
+        .filter_map(resolve_slash_command)
+        .take(limit)
+        .collect()
+}
+
 fn levenshtein_distance(a: &str, b: &str) -> usize {
     if a == b {
         return 0;
@@ -1301,6 +1368,12 @@ struct HistorySearchState {
     cursor: usize,
 }
 
+#[derive(Debug, Clone)]
+struct SlashCompletionState {
+    matches: Vec<String>,
+    cursor: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FeedRowCache {
     width: u16,
@@ -1339,6 +1412,7 @@ struct TuiState {
     history_cursor: Option<usize>,
     history_search: Option<HistorySearchState>,
     pending_approval: Option<PendingApproval>,
+    slash_completion: Option<SlashCompletionState>,
     palette_open: bool,
     palette_filter: String,
     palette_cursor: usize,
@@ -1370,6 +1444,7 @@ impl TuiState {
             history_cursor: None,
             history_search: None,
             pending_approval: None,
+            slash_completion: None,
             palette_open: false,
             palette_filter: String::new(),
             palette_cursor: 0,
@@ -1468,6 +1543,7 @@ impl TuiState {
 
     fn clear_input(&mut self) {
         self.input.clear();
+        self.clear_slash_completion();
         self.history_cursor = None;
         self.clear_history_search();
     }
@@ -1516,6 +1592,7 @@ impl TuiState {
 
         self.history_cursor = Some(next);
         self.input = self.history[next].clone();
+        self.clear_slash_completion();
     }
 
     fn history_next(&mut self) {
@@ -1528,11 +1605,13 @@ impl TuiState {
             Some(idx) if idx + 1 >= self.history.len() => {
                 self.history_cursor = None;
                 self.input.clear();
+                self.clear_slash_completion();
             }
             Some(idx) => {
                 let next = idx + 1;
                 self.history_cursor = Some(next);
                 self.input = self.history[next].clone();
+                self.clear_slash_completion();
             }
         }
     }
@@ -1588,14 +1667,96 @@ impl TuiState {
 
         if let Some(state) = &self.history_search {
             let history_index = state.matches[state.cursor];
+            let cursor = state.cursor;
+            let total = state.matches.len();
             self.input = self.history[history_index].clone();
             self.history_cursor = Some(history_index);
-            self.status = format!(
-                "history search {}/{}",
-                state.cursor + 1,
-                state.matches.len()
-            );
+            self.clear_slash_completion();
+            self.status = format!("history search {}/{}", cursor + 1, total);
         }
+    }
+
+    fn clear_slash_completion(&mut self) {
+        self.slash_completion = None;
+    }
+
+    fn autocomplete_slash_command(&mut self, reverse: bool) -> bool {
+        if self.slash_completion.is_some() {
+            let mut cycled = None;
+            if let Some(active) = &mut self.slash_completion
+                && !active.matches.is_empty()
+                && self.input == active.matches[active.cursor]
+            {
+                let total = active.matches.len();
+                if reverse {
+                    active.cursor = if active.cursor == 0 {
+                        total.saturating_sub(1)
+                    } else {
+                        active.cursor.saturating_sub(1)
+                    };
+                } else {
+                    active.cursor = (active.cursor + 1) % total;
+                }
+
+                cycled = Some((
+                    active.matches[active.cursor].clone(),
+                    active.cursor,
+                    total,
+                    format_slash_completion_choices(&active.matches),
+                ));
+            }
+
+            if let Some((selected, cursor, total, choices)) = cycled {
+                self.input = selected;
+                self.history_cursor = None;
+                self.clear_history_search();
+                self.status = format!("autocomplete {}/{} ({})", cursor + 1, total, choices);
+                return true;
+            }
+
+            self.slash_completion = None;
+        }
+
+        let Some(seed) = slash_completion_seed(&self.input) else {
+            return false;
+        };
+        let matches = slash_completion_matches(&seed);
+        if matches.is_empty() {
+            return false;
+        }
+
+        self.history_cursor = None;
+        self.clear_history_search();
+
+        if matches.len() == 1 {
+            let selected = format!("/{} ", matches[0]);
+            self.input = selected;
+            self.status = format!("autocomplete /{}", matches[0]);
+            self.slash_completion = None;
+            return true;
+        }
+
+        let rendered_matches = matches
+            .into_iter()
+            .map(|name| format!("/{name}"))
+            .collect::<Vec<_>>();
+        self.slash_completion = Some(SlashCompletionState {
+            matches: rendered_matches,
+            cursor: 0,
+        });
+
+        if let Some(active) = &self.slash_completion {
+            self.input = active.matches[active.cursor].clone();
+            self.status = format!(
+                "autocomplete {}/{} ({})",
+                active.cursor + 1,
+                active.matches.len(),
+                format_slash_completion_choices(&active.matches)
+            );
+            return true;
+        }
+
+        false
     }
 
     fn clear_history_search(&mut self) {
@@ -1715,11 +1876,17 @@ impl TuiState {
             viewport.height
         };
         let hero_height = home_hero_height(max_height);
-        let fixed_rows = hero_height.saturating_add(4);
+        let slash_hint_rows = self.slash_hint_height(5);
+        let fixed_rows = hero_height
+            .saturating_add(4)
+            .saturating_add(slash_hint_rows);
         let max_feed_rows = max_height.saturating_sub(fixed_rows).max(1);
         let feed_rows = self.desired_feed_rows(max_feed_rows, viewport.width);
         let feed = self.prepare_feed(viewport.width);
-        let root_height = hero_height.saturating_add(feed_rows).saturating_add(4);
+        let root_height = hero_height
+            .saturating_add(feed_rows)
+            .saturating_add(slash_hint_rows)
+            .saturating_add(4);
 
         let root = Rect {
             x: viewport.x,
@@ -1733,6 +1900,7 @@ impl TuiState {
             .constraints([
                 Constraint::Length(hero_height),
                 Constraint::Length(feed_rows),
+                Constraint::Length(slash_hint_rows),
                 Constraint::Length(3),
                 Constraint::Length(1),
             ])
@@ -1740,8 +1908,9 @@ impl TuiState {
 
         self.draw_home(frame, home[0]);
         self.draw_conversation_feed(frame, home[1], feed);
-        self.draw_input(frame, home[2]);
-        self.draw_footer(frame, home[3]);
+        self.draw_slash_hints(frame, home[2]);
+        self.draw_input(frame, home[3]);
+        self.draw_footer(frame, home[4]);
         if self.palette_open {
             self.draw_palette(frame, root);
         }
@@ -1922,6 +2091,74 @@ impl TuiState {
         frame.render_widget(conversation, area);
     }
 
+    fn slash_hint_height(&self, limit: usize) -> u16 {
+        let count = self.inline_slash_hints(limit).len();
+        if count == 0 {
+            0
+        } else {
+            let raw = u16::try_from(count + 1).unwrap_or(u16::MAX);
+            raw.min(6)
+        }
+    }
+
+    fn inline_slash_hints(&self, limit: usize) -> Vec<&'static SlashCommandSpec> {
+        slash_hint_specs(&self.input, limit)
+    }
+
+    fn active_slash_completion_name(&self) -> Option<&str> {
+        self.slash_completion
+            .as_ref()
+            .and_then(|state| state.matches.get(state.cursor))
+            .and_then(|selected| selected.strip_prefix('/'))
+    }
+
+    fn draw_slash_hints(&self, frame: &mut ratatui::Frame, area: Rect) {
+        if area.height == 0 {
+            return;
+        }
+
+        let hints = self.inline_slash_hints(5);
+        if hints.is_empty() {
+            return;
+        }
+
+        let selected = self.active_slash_completion_name();
+        let mut lines = Vec::with_capacity(hints.len() + 1);
+        lines.push(Line::from(vec![
+            Span::styled("commands: ", Style::default().fg(THEME_PRIMARY)),
+            Span::styled(
+                "Tab/Shift+Tab to complete",
+                Style::default().fg(THEME_MUTED),
+            ),
+        ]));
+        for spec in hints {
+            let is_selected = selected.is_some_and(|name| name == spec.name);
+            let command_style = if is_selected {
+                Style::default()
+                    .fg(THEME_PRIMARY)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(THEME_TEXT)
+            };
+            let marker = if is_selected { ">" } else { " " };
+            lines.push(Line::from(vec![
+                Span::styled(format!("{marker} /{} ", spec.name), command_style),
+                Span::styled(spec.summary, Style::default().fg(THEME_MUTED)),
+            ]));
+        }
+
+        let hints_widget = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(THEME_PRIMARY))
+                    .style(Style::default().bg(THEME_BG)),
+            )
+            .style(Style::default().bg(THEME_BG))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(hints_widget, area);
+    }
+
     fn draw_input(&self, frame: &mut ratatui::Frame, area: Rect) {
         let prompt = Span::styled(
             "> ",
@@ -1965,7 +2202,7 @@ impl TuiState {
         let left = Paragraph::new(Line::from(vec![
             Span::styled("?", Style::default().fg(THEME_PRIMARY)),
             Span::styled(
-                " shortcuts: /help Ctrl+R(search) Ctrl+P(palette)",
+                " shortcuts: /help Tab(complete) Ctrl+R(search) Ctrl+P(palette)",
                 Style::default().fg(THEME_MUTED),
             ),
         ]))
@@ -2336,6 +2573,78 @@ mod tests {
 
         let fuzzy = suggest_slash_commands("provder", 3);
         assert!(fuzzy.contains(&"provider"));
+    }
+
+    #[test]
+    fn slash_completion_seed_only_applies_to_single_token_slash_input() {
+        assert_eq!(slash_completion_seed("/pro"), Some("pro".to_owned()));
+        assert_eq!(slash_completion_seed("/"), Some(String::new()));
+        assert_eq!(slash_completion_seed("/memory status"), None);
+        assert_eq!(slash_completion_seed("hello"), None);
+    }
+
+    #[test]
+    fn slash_completion_matches_include_alias_prefixes() {
+        let by_name = slash_completion_matches("pro");
+        assert_eq!(by_name, vec!["profile", "provider"]);
+
+        let by_alias = slash_completion_matches("q");
+        assert_eq!(by_alias, vec!["quit"]);
+    }
+
+    #[test]
+    fn slash_hint_specs_show_commands_for_root_slash() {
+        let hints = slash_hint_specs("/", 3);
+        assert_eq!(hints.len(), 3);
+        assert_eq!(hints[0].name, "clear");
+        assert_eq!(hints[1].name, "help");
+        assert_eq!(hints[2].name, "home");
+    }
+
+    #[test]
+    fn slash_hint_specs_filter_by_prefix_and_hide_after_args() {
+        let filtered = slash_hint_specs("/pro", 5);
+        assert_eq!(
+            filtered.iter().map(|spec| spec.name).collect::<Vec<_>>(),
+            vec!["profile", "provider"]
+        );
+
+        let none = slash_hint_specs("/memory status", 5);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn tab_completion_completes_unique_command_with_trailing_space() {
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
+        state.input = "/stat".to_owned();
+
+        assert!(state.autocomplete_slash_command(false));
+        assert_eq!(state.input, "/status ");
+    }
+
+    #[test]
+    fn tab_completion_cycles_between_multiple_matches() {
+        let mut state = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
+        state.input = "/pro".to_owned();
+
+        assert!(state.autocomplete_slash_command(false));
+        assert_eq!(state.input, "/profile");
+
+        assert!(state.autocomplete_slash_command(false));
+        assert_eq!(state.input, "/provider");
+
+        assert!(state.autocomplete_slash_command(true));
+        assert_eq!(state.input, "/profile");
     }
 
     #[test]

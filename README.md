@@ -135,7 +135,9 @@ cargo run -- --config config/dev.local.toml ask "hello"
 - Slash commands:
   - `/help`, `/home`, `/init [--force]`, `/memory [status|show|paths|reload]`, `/clear`, `/session`, `/provider`, `/profile <name>`, `/new [title]`, `/tool [name ...]`, `/status`, `/palette`, `/quit`
   - Aliases include `/commands`, `/model`, `/tools`, `/mem`, `/bootstrap`, `/exit`, `/q`
+- Typing `/` in TUI now shows inline command suggestions.
 - History: `Up` / `Down`
+- Command autocomplete: `Tab` (forward), `Shift+Tab` (reverse) for slash commands
 - History search: `Ctrl+R`
 - Command palette: `Ctrl+P`
 - Scroll transcript: `PgUp` / `PgDn`, `Home`, `End`

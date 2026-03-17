@@ -16,6 +16,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - `/memory status|show|paths|reload` to inspect and reload effective memory without restarting TUI
 - Memory status output now reports resolved scope file paths and load states for user/local/project scopes.
 - Unit coverage for instruction precedence, project init/force behavior, and reload behavior.
+- TUI slash-command auto-complete: `Tab` completes commands and `Shift+Tab` cycles backward through matching commands.
+- TUI inline slash suggestions: typing `/` now opens an in-context command list above the input prompt.
 
 ### Changed
 - Slash-command handling now resolves aliases through a single registry (for example `/model`, `/tools`, `/commands`, `/q`).
