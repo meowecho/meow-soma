@@ -1,7 +1,7 @@
 [security]
-approval_policy = "permission_gate"
+approval_policy = "ask"
 allowlist = ["git status", "ls"]
-denylist = ["rm -rf /", "blocked-tool"]
+denylist = ["rm -rf /", "blocked-tool", "tool:fs.write tmp/protected"]
 
 [[cases]]
 kind = "shell"
@@ -37,6 +37,7 @@ expected_reason_code = "tool_allowed"
 [[cases]]
 kind = "tool"
 input = "fs.write"
+args = ["tmp/safe.txt", "hello"]
 risky = true
 expected_severity = "approve_required"
 expected_reason_code = "risky_tool"
@@ -45,5 +46,13 @@ expected_reason_code = "risky_tool"
 kind = "tool"
 input = "blocked-tool"
 risky = false
+expected_severity = "deny"
+expected_reason_code = "denylist_match"
+
+[[cases]]
+kind = "tool"
+input = "fs.write"
+args = ["tmp/protected-report.txt", "hello"]
+risky = true
 expected_severity = "deny"
 expected_reason_code = "denylist_match"

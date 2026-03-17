@@ -4,6 +4,20 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
+pub const APPROVAL_POLICY_ALLOW: &str = "allow";
+pub const APPROVAL_POLICY_ASK: &str = "ask";
+pub const APPROVAL_POLICY_DENY: &str = "deny";
+
+pub fn normalize_approval_policy(raw: &str) -> Option<&'static str> {
+    let lowered = raw.trim().to_ascii_lowercase();
+    match lowered.as_str() {
+        "allow" | "always_allow" => Some(APPROVAL_POLICY_ALLOW),
+        "ask" | "permission_gate" => Some(APPROVAL_POLICY_ASK),
+        "deny" | "read_only" => Some(APPROVAL_POLICY_DENY),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MeowConfig {
@@ -77,7 +91,7 @@ pub struct SecurityConfig {
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
-            approval_policy: "permission_gate".to_owned(),
+            approval_policy: APPROVAL_POLICY_ASK.to_owned(),
             allowlist: vec![
                 "ls".to_owned(),
                 "pwd".to_owned(),
@@ -270,11 +284,9 @@ pub fn validate(config: &MeowConfig) -> Result<()> {
         errors.push("[runtime].concurrency must be > 0".to_owned());
     }
 
-    let policy = config.security.approval_policy.as_str();
-    if !matches!(policy, "permission_gate" | "always_allow" | "read_only") {
+    if normalize_approval_policy(&config.security.approval_policy).is_none() {
         errors.push(
-            "[security].approval_policy must be one of: permission_gate, always_allow, read_only"
-                .to_owned(),
+            "[security].approval_policy must be one of: allow, ask, deny (legacy aliases: always_allow, permission_gate, read_only)".to_owned(),
         );
     }
 
@@ -361,7 +373,7 @@ mod tests {
             "[project].name must not be empty",
             "[runtime].max_steps must be > 0",
             "[runtime].concurrency must be > 0",
-            "[security].approval_policy must be one of: permission_gate, always_allow, read_only",
+            "[security].approval_policy must be one of: allow, ask, deny (legacy aliases: always_allow, permission_gate, read_only)",
             "default profile 'missing-profile' not found in [[profiles]]",
         ] {
             assert!(

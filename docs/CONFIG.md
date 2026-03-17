@@ -50,6 +50,23 @@ Instruction memory scopes:
   - `/memory status|show|paths|reload` inspects and reloads instruction memory without restarting TUI
 
 Security/runtime policy details:
+- `security.approval_policy` canonical modes:
+  - `allow`: allow all commands/tools except denylist matches
+  - `ask`: deny denylist matches, require approval for risky actions, allow non-risky tools
+  - `deny`: deny risky actions and allow only allowlisted non-risky actions
+- Legacy aliases remain supported:
+  - `always_allow` -> `allow`
+  - `permission_gate` -> `ask`
+  - `read_only` -> `deny`
+- Rule matching order is deterministic:
+  1. denylist
+  2. mode behavior
+  3. allowlist (for shell in `ask`; for shell/tool in `deny`)
+- Rule specifier syntax:
+  - `shell:<command-prefix>` for shell-only matching
+  - `tool:<name>` for tool-name matching
+  - `tool:<name> <arg-prefix>` for tool+args specifier matching
+  - unscoped rules remain valid for backward compatibility
 - Policy decisions are classified as `allow`, `approve_required`, or `deny`
 - Approval audit rows persist both human-readable reason and machine-readable `reason_code`
 - `fs.write` is constrained to the current workspace root by default

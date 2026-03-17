@@ -23,7 +23,7 @@ Archived completed cycle: `docs/plans/archive/execution-plan-2026-q1.md`.
 |---|---|---|---|---|
 | 1 | Built-in slash command surface expansion | Done | cli/tui maintainer | current cycle |
 | 2 | Instruction memory system (project/user/local) | Done | runtime/config maintainer | current cycle |
-| 3 | Permission modes and rule engine hardening | Planned | policy/runtime maintainer | current cycle |
+| 3 | Permission modes and rule engine hardening | Done | policy/runtime maintainer | current cycle |
 | 4 | CLI session lifecycle parity (resume/fork/headless) | Planned | cli/runtime maintainer | current cycle |
 
 ## Current Cycle Phase Plan
@@ -120,7 +120,7 @@ Completion notes:
 ### Phase 3 - Permission Modes and Rule Engine Hardening
 
 Status:
-- Planned
+- Done
 
 Objective:
 - Ensure safe, predictable tool execution policy for day-to-day usage.
@@ -147,6 +147,13 @@ Deliverables:
 Definition of done:
 - Risky actions always follow deterministic policy outcomes.
 - Rule behavior is documented and test-verified.
+
+Completion notes:
+- Added canonical permission modes `allow|ask|deny` with legacy alias compatibility (`always_allow|permission_gate|read_only`).
+- Hardened deterministic policy evaluation order: denylist -> mode semantics -> allowlist.
+- Added deterministic tool-specifier matching (`tool:<name>` and `tool:<name> <arg-prefix>`) and shell-only rule prefix (`shell:`).
+- Kept inline approval flow compatible in TUI while applying new policy engine behavior.
+- Added fixture and integration coverage for risky-tool approval, deny-mode blocking, and specifier-based denylist enforcement.
 
 Verification commands:
 - `cargo fmt --check`

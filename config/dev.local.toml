@@ -9,7 +9,7 @@ concurrency = 2
 retry_budget = 2
 
 [security]
-approval_policy = "permission_gate"
+approval_policy = "ask"
 allowlist = ["ls", "pwd", "cat", "rg", "git status", "git diff"]
 denylist = ["rm -rf /", "mkfs", "dd if=", "git reset --hard"]
 

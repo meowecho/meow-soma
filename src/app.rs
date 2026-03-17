@@ -550,7 +550,7 @@ fn execute_tool_with_policy(
     let decision = if args.name == "shell" {
         policy.evaluate_shell(&args.args.join(" "))
     } else {
-        policy.evaluate_tool(&args.name, ToolRegistry::is_risky(&args.name))
+        policy.evaluate_tool(&args.name, &args.args, ToolRegistry::is_risky(&args.name))
     };
 
     if !decision.is_allowed() {

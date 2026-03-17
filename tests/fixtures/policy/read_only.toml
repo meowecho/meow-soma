@@ -1,6 +1,6 @@
 [security]
-approval_policy = "read_only"
-allowlist = ["git status", "ls"]
+approval_policy = "deny"
+allowlist = ["git status", "ls", "tool:echo", "tool:fs.read Cargo.toml"]
 denylist = ["rm -rf /", "blocked-tool"]
 
 [[cases]]
@@ -20,11 +20,28 @@ kind = "tool"
 input = "echo"
 risky = false
 expected_severity = "allow"
-expected_reason_code = "tool_allowed"
+expected_reason_code = "read_only_allowlisted"
+
+[[cases]]
+kind = "tool"
+input = "fs.read"
+args = ["Cargo.toml"]
+risky = false
+expected_severity = "allow"
+expected_reason_code = "read_only_allowlisted"
+
+[[cases]]
+kind = "tool"
+input = "fs.read"
+args = ["README.md"]
+risky = false
+expected_severity = "deny"
+expected_reason_code = "read_only_blocked"
 
 [[cases]]
 kind = "tool"
 input = "fs.write"
+args = ["tmp/out.txt", "hello"]
 risky = true
 expected_severity = "deny"
 expected_reason_code = "read_only_blocked"

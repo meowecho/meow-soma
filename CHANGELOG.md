@@ -7,6 +7,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ## [Unreleased]
 
 ### Added
+- Canonical security policy modes in runtime config: `allow`, `ask`, and `deny` (with legacy alias compatibility).
+- Deterministic policy rule specifier support:
+  - `shell:<command-prefix>`
+  - `tool:<name>`
+  - `tool:<name> <arg-prefix>`
 - TUI slash-command registry with canonical command metadata (usage, aliases, help text) for consistent command dispatch.
 - New `/status` slash command to show current runtime/session summary in the chat feed.
 - Command-suggestion behavior for unknown slash commands, including prefix and typo-tolerant matching hints.
@@ -20,6 +25,9 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - TUI inline slash suggestions: typing `/` now opens an in-context command list above the input prompt.
 
 ### Changed
+- Policy evaluation order is now deterministic: denylist -> mode semantics -> allowlist.
+- `ask` mode keeps non-risky tool execution frictionless while requiring approval for risky actions.
+- `deny` mode now blocks risky actions and allows only explicit allowlisted non-risky actions.
 - Slash-command handling now resolves aliases through a single registry (for example `/model`, `/tools`, `/commands`, `/q`).
 - Command palette now uses the same slash-command registry as runtime dispatch for consistent discoverability and execution.
 - Command palette filtering now supports slash-prefixed search input (for example `/pro`).

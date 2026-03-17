@@ -983,7 +983,7 @@ fn run_tool_from_slash(
     let decision = if tool_name == "shell" {
         policy.evaluate_shell(&tool_args.join(" "))
     } else {
-        policy.evaluate_tool(&tool_name, ToolRegistry::is_risky(&tool_name))
+        policy.evaluate_tool(&tool_name, &tool_args, ToolRegistry::is_risky(&tool_name))
     };
 
     if !decision.is_allowed() {
@@ -2465,7 +2465,9 @@ fn home_hero_height(total_height: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SecurityConfig;
     use crate::memory::InstructionPaths;
+    use crate::state::StateStore;
     use uuid::Uuid;
 
     fn test_instruction_memory() -> InstructionMemory {
@@ -2477,6 +2479,10 @@ mod tests {
             project_root: root,
         })
         .expect("test instruction memory should load")
+    }
+
+    fn temp_db_path(prefix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("{prefix}-{}.db", Uuid::new_v4()))
     }
 
     #[test]
@@ -2733,6 +2739,68 @@ mod tests {
     fn parse_tool_args_splits_whitespace_words() {
         let parsed = parse_tool_args("shell ls -la");
         assert_eq!(parsed, vec!["shell", "ls", "-la"]);
+    }
+
+    #[test]
+    fn tool_slash_sets_pending_approval_for_risky_actions_in_ask_mode() {
+        let mut ui = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
+        let state = StateStore::open(&temp_db_path("meow-tui-policy-ask"))
+            .expect("state store should initialize");
+        let policy = PolicyEngine::new(&SecurityConfig {
+            approval_policy: "ask".to_owned(),
+            allowlist: vec!["tool:echo".to_owned()],
+            denylist: vec![],
+        });
+        let tools = ToolRegistry::new();
+
+        let handled = run_tool_from_slash(
+            &mut ui,
+            &state,
+            &policy,
+            &tools,
+            "fs.write tmp/tui-policy-ask.txt hello",
+        )
+        .expect("tool command should be handled");
+
+        assert!(!handled);
+        assert!(ui.pending_approval.is_some());
+        assert!(ui.status.contains("approval required"));
+    }
+
+    #[test]
+    fn tool_slash_denylist_specifier_blocks_before_pending_approval() {
+        let mut ui = TuiState::new(
+            "s".to_owned(),
+            "default".to_owned(),
+            "p".to_owned(),
+            test_instruction_memory(),
+        );
+        let state = StateStore::open(&temp_db_path("meow-tui-policy-deny"))
+            .expect("state store should initialize");
+        let policy = PolicyEngine::new(&SecurityConfig {
+            approval_policy: "ask".to_owned(),
+            allowlist: vec!["tool:echo".to_owned()],
+            denylist: vec!["tool:fs.write tmp/tui-policy-protected".to_owned()],
+        });
+        let tools = ToolRegistry::new();
+
+        let handled = run_tool_from_slash(
+            &mut ui,
+            &state,
+            &policy,
+            &tools,
+            "fs.write tmp/tui-policy-protected.txt secret",
+        )
+        .expect("tool command should be handled");
+
+        assert!(!handled);
+        assert!(ui.pending_approval.is_none());
+        assert!(ui.status.starts_with("tool denied:"));
     }
 
     #[test]
