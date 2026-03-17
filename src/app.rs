@@ -5,11 +5,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 
 use crate::cli::{
-    Cli, Commands, ConfigCommand, ConfigSetupArgs, ExportFormat, McpCommand, MetricsCommand,
-    SessionCommand, SessionExportArgs, SessionImportArgs, SessionResumeArgs, SetupProvider,
-    ToolCommand, ToolExecArgs,
+    AskArgs, Cli, Commands, ConfigCommand, ConfigSetupArgs, ExportFormat, McpCommand,
+    MetricsCommand, ResponseOutput, RunArgs, SessionCommand, SessionExportArgs, SessionForkArgs,
+    SessionImportArgs, SessionResumeArgs, SetupProvider, ToolCommand, ToolExecArgs,
 };
 use crate::config;
 use crate::mcp;
@@ -59,22 +60,25 @@ pub fn run(cli: Cli) -> Result<()> {
                     &profile_name,
                     context_window,
                     &cancellation,
+                    None,
                 ),
                 Some(Commands::Ask(args)) => run_ask(
                     &state,
                     &runtime,
                     &load_instruction_memory(&cfg)?,
                     &profile_name,
+                    context_window,
                     &cancellation,
-                    &args.prompt,
+                    args,
                 ),
                 Some(Commands::Run(args)) => run_goal(
                     &state,
                     &runtime,
                     &load_instruction_memory(&cfg)?,
                     &profile_name,
+                    context_window,
                     &cancellation,
-                    &args.goal,
+                    args,
                 ),
                 Some(Commands::Tool { command }) => {
                     run_tool_command(&state, &policy, &tools, command)
@@ -82,7 +86,23 @@ pub fn run(cli: Cli) -> Result<()> {
                 Some(Commands::Mcp { command }) => {
                     run_mcp_command(&state, &policy, &tools, command)
                 }
-                Some(Commands::Session { command }) => run_session_command(&state, command),
+                Some(Commands::Session { command }) => match command {
+                    SessionCommand::Continue(args) => {
+                        let session = state.resolve_session_ref(&args.session)?;
+                        tui::run_tui(
+                            &state,
+                            &policy,
+                            &tools,
+                            &runtime,
+                            load_instruction_memory(&cfg)?,
+                            &profile_name,
+                            context_window,
+                            &cancellation,
+                            Some(session.id.as_str()),
+                        )
+                    }
+                    other => run_session_command(&state, other),
+                },
                 Some(Commands::Metrics { command }) => run_metrics_command(&state, command),
                 Some(Commands::Config { .. }) => unreachable!(),
             }
@@ -95,31 +115,27 @@ fn run_ask(
     runtime: &RuntimeAgent,
     instruction_memory: &InstructionMemory,
     profile_name: &str,
+    context_window: usize,
     cancellation: &CancellationToken,
-    prompt: &str,
+    args: AskArgs,
 ) -> Result<()> {
-    let session_id = state.create_session(Some("ask"))?;
-    state.add_message(&session_id, "user", prompt)?;
+    let session_id = resolve_or_create_session(state, args.session.as_deref(), "ask")?;
+    let context_messages =
+        load_bounded_context(state, &session_id, context_window, instruction_memory)?;
 
     let runtime_context = RuntimeExecutionContext::new(
         RuntimeOperation::Ask,
         profile_name,
         Some(session_id.clone()),
-        build_instruction_context_messages(instruction_memory),
+        context_messages,
     );
+
+    state.add_message(&session_id, "user", &args.prompt)?;
 
     cancellation.clear();
     let request_started = Instant::now();
-    match runtime.respond_with_context(&runtime_context, prompt, cancellation) {
+    match runtime.respond_with_context(&runtime_context, &args.prompt, cancellation) {
         Ok(response) => {
-            println!("{}", response.text);
-            println!(
-                "[meta] profile={} provider={}:{} duration_ms={}",
-                profile_name,
-                runtime.provider_name(),
-                runtime.provider_model(),
-                response.duration_ms
-            );
             state.add_message(&session_id, "assistant", &response.text)?;
             record_response_metric(
                 state,
@@ -130,6 +146,7 @@ fn run_ask(
                 true,
                 None,
             );
+            render_ask_output(args.output, &session_id, profile_name, runtime, &response)?;
             Ok(())
         }
         Err(err) => {
@@ -143,6 +160,7 @@ fn run_ask(
                 false,
                 Some(kind.as_str()),
             );
+            render_ask_error_output(args.output, &session_id, profile_name, runtime, &kind, &err)?;
             Err(err)
         }
     }
@@ -153,21 +171,28 @@ fn run_goal(
     runtime: &RuntimeAgent,
     instruction_memory: &InstructionMemory,
     profile_name: &str,
+    context_window: usize,
     cancellation: &CancellationToken,
-    goal: &str,
+    args: RunArgs,
 ) -> Result<()> {
+    let session_id = resolve_or_create_session(state, args.session.as_deref(), "run")?;
+    let context_messages =
+        load_bounded_context(state, &session_id, context_window, instruction_memory)?;
     let runtime_context = RuntimeExecutionContext::new(
         RuntimeOperation::Run,
         profile_name,
-        None,
-        build_instruction_context_messages(instruction_memory),
+        Some(session_id.clone()),
+        context_messages,
     );
+
+    state.add_message(&session_id, "user", &args.goal)?;
 
     cancellation.clear();
     let request_started = Instant::now();
-    match runtime.run_goal_with_context(&runtime_context, goal, cancellation) {
+    match runtime.run_goal_with_context(&runtime_context, &args.goal, cancellation) {
         Ok(response) => {
-            let run_id = state.record_run(goal, &response.text, "ok")?;
+            let run_id = state.record_run(&args.goal, &response.text, "ok")?;
+            state.add_message(&session_id, "assistant", &response.text)?;
             record_response_metric(
                 state,
                 "run",
@@ -177,7 +202,169 @@ fn run_goal(
                 true,
                 None,
             );
+            render_run_output(
+                args.output,
+                &run_id,
+                &session_id,
+                profile_name,
+                runtime,
+                &response,
+            )?;
+            Ok(())
+        }
+        Err(err) => {
+            let run_id = state.record_run(&args.goal, &err.to_string(), "error")?;
+            let kind = derive_error_kind(&err);
+            record_response_metric(
+                state,
+                "run",
+                runtime.provider_name(),
+                runtime.provider_model(),
+                request_started.elapsed().as_millis(),
+                false,
+                Some(kind.as_str()),
+            );
+            render_run_error_output(
+                args.output,
+                &run_id,
+                &session_id,
+                profile_name,
+                runtime,
+                &kind,
+                &err,
+            )?;
+            Err(err)
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AskJsonOutput<'a> {
+    session_id: &'a str,
+    profile: &'a str,
+    provider: &'a str,
+    model: &'a str,
+    duration_ms: u128,
+    status: &'a str,
+    response: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct AskJsonErrorOutput<'a> {
+    session_id: &'a str,
+    profile: &'a str,
+    provider: &'a str,
+    model: &'a str,
+    status: &'a str,
+    error_kind: &'a str,
+    error: &'a str,
+}
+
+fn render_ask_output(
+    output: ResponseOutput,
+    session_id: &str,
+    profile_name: &str,
+    runtime: &RuntimeAgent,
+    response: &crate::runtime::RuntimeResponse,
+) -> Result<()> {
+    match output {
+        ResponseOutput::Text => {
+            println!("{}", response.text);
+            println!(
+                "[meta] session={} profile={} provider={}:{} duration_ms={}",
+                session_id,
+                profile_name,
+                runtime.provider_name(),
+                runtime.provider_model(),
+                response.duration_ms
+            );
+        }
+        ResponseOutput::Json => {
+            let payload = AskJsonOutput {
+                session_id,
+                profile: profile_name,
+                provider: runtime.provider_name(),
+                model: runtime.provider_model(),
+                duration_ms: response.duration_ms,
+                status: "ok",
+                response: &response.text,
+            };
+            println!(
+                "{}",
+                serde_json::to_string(&payload).context("failed to serialize ask response json")?
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn render_ask_error_output(
+    output: ResponseOutput,
+    session_id: &str,
+    profile_name: &str,
+    runtime: &RuntimeAgent,
+    error_kind: &str,
+    err: &anyhow::Error,
+) -> Result<()> {
+    if !matches!(output, ResponseOutput::Json) {
+        return Ok(());
+    }
+
+    let payload = AskJsonErrorOutput {
+        session_id,
+        profile: profile_name,
+        provider: runtime.provider_name(),
+        model: runtime.provider_model(),
+        status: "error",
+        error_kind,
+        error: &err.to_string(),
+    };
+    println!(
+        "{}",
+        serde_json::to_string(&payload).context("failed to serialize ask error json")?
+    );
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct RunJsonOutput<'a> {
+    run_id: &'a str,
+    session_id: &'a str,
+    profile: &'a str,
+    provider: &'a str,
+    model: &'a str,
+    started_at: &'a str,
+    finished_at: &'a str,
+    duration_ms: u128,
+    status: &'a str,
+    response: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct RunJsonErrorOutput<'a> {
+    run_id: &'a str,
+    session_id: &'a str,
+    profile: &'a str,
+    provider: &'a str,
+    model: &'a str,
+    status: &'a str,
+    error_kind: &'a str,
+    error: &'a str,
+}
+
+fn render_run_output(
+    output: ResponseOutput,
+    run_id: &str,
+    session_id: &str,
+    profile_name: &str,
+    runtime: &RuntimeAgent,
+    response: &crate::runtime::RuntimeResponse,
+) -> Result<()> {
+    match output {
+        ResponseOutput::Text => {
             println!("run_id      : {run_id}");
+            println!("session_id  : {session_id}");
             println!("profile     : {profile_name}");
             println!(
                 "provider    : {}:{}",
@@ -190,23 +377,58 @@ fn run_goal(
             println!("status      : ok");
             println!();
             println!("{}", response.text);
-            Ok(())
         }
-        Err(err) => {
-            state.record_run(goal, &err.to_string(), "error")?;
-            let kind = derive_error_kind(&err);
-            record_response_metric(
-                state,
-                "run",
-                runtime.provider_name(),
-                runtime.provider_model(),
-                request_started.elapsed().as_millis(),
-                false,
-                Some(kind.as_str()),
+        ResponseOutput::Json => {
+            let payload = RunJsonOutput {
+                run_id,
+                session_id,
+                profile: profile_name,
+                provider: runtime.provider_name(),
+                model: runtime.provider_model(),
+                started_at: &response.started_at,
+                finished_at: &response.finished_at,
+                duration_ms: response.duration_ms,
+                status: "ok",
+                response: &response.text,
+            };
+            println!(
+                "{}",
+                serde_json::to_string(&payload).context("failed to serialize run response json")?
             );
-            Err(err)
         }
     }
+
+    Ok(())
+}
+
+fn render_run_error_output(
+    output: ResponseOutput,
+    run_id: &str,
+    session_id: &str,
+    profile_name: &str,
+    runtime: &RuntimeAgent,
+    error_kind: &str,
+    err: &anyhow::Error,
+) -> Result<()> {
+    if !matches!(output, ResponseOutput::Json) {
+        return Ok(());
+    }
+
+    let payload = RunJsonErrorOutput {
+        run_id,
+        session_id,
+        profile: profile_name,
+        provider: runtime.provider_name(),
+        model: runtime.provider_model(),
+        status: "error",
+        error_kind,
+        error: &err.to_string(),
+    };
+    println!(
+        "{}",
+        serde_json::to_string(&payload).context("failed to serialize run error json")?
+    );
+    Ok(())
 }
 
 fn run_tool_command(
@@ -316,19 +538,27 @@ fn run_session_command(state: &StateStore, command: SessionCommand) -> Result<()
             Ok(())
         }
         SessionCommand::Resume(args) => resume_session(state, args),
+        SessionCommand::Fork(args) => fork_session(state, args),
+        SessionCommand::Continue(_) => {
+            bail!("`session continue` must be routed through runtime command handler")
+        }
         SessionCommand::Export(args) => export_session(state, args),
         SessionCommand::Import(args) => import_session(state, args),
     }
 }
 
 fn resume_session(state: &StateStore, args: SessionResumeArgs) -> Result<()> {
-    let messages = state.get_messages(&args.session_id)?;
+    let session = state.resolve_session_ref(&args.session)?;
+    let messages = state.get_messages(&session.id)?;
     if messages.is_empty() {
-        println!("no messages for session {}", args.session_id);
+        println!("no messages for session {}", session.id);
         return Ok(());
     }
 
-    println!("session: {}", args.session_id);
+    println!("session: {}", session.id);
+    if let Some(title) = session.title.as_deref() {
+        println!("title  : {title}");
+    }
     for (idx, message) in messages.iter().enumerate() {
         println!();
         println!("[{idx}] {} | {}", message.role, message.created_at);
@@ -344,18 +574,19 @@ fn export_session(state: &StateStore, args: SessionExportArgs) -> Result<()> {
     let rendered = if args.all {
         state.export_snapshot_json()?
     } else {
-        let session_id = args
+        let session_ref = args
             .session_id
             .as_deref()
-            .context("missing session id; provide SESSION_ID or --all")?;
-        let messages = state.get_messages(session_id)?;
+            .context("missing session reference; provide SESSION or --all")?;
+        let session = state.resolve_session_ref(session_ref)?;
+        let messages = state.get_messages(&session.id)?;
         if messages.is_empty() {
-            bail!("session {} has no messages", session_id);
+            bail!("session {} has no messages", session.id);
         }
 
         match args.format.unwrap_or(ExportFormat::Json) {
             ExportFormat::Json => serde_json::to_string_pretty(&messages)?,
-            ExportFormat::Markdown => render_markdown_session(session_id, &messages),
+            ExportFormat::Markdown => render_markdown_session(&session.id, &messages),
         }
     };
 
@@ -381,10 +612,21 @@ fn import_session(state: &StateStore, args: SessionImportArgs) -> Result<()> {
     Ok(())
 }
 
+fn fork_session(state: &StateStore, args: SessionForkArgs) -> Result<()> {
+    let source = state.resolve_session_ref(&args.session)?;
+    let fork_id = state.fork_session(&source.id, args.title.as_deref())?;
+    println!("forked session: {fork_id}");
+    println!("source       : {}", source.id);
+    if let Some(title) = args.title {
+        println!("title        : {title}");
+    }
+    Ok(())
+}
+
 fn validate_session_export_args(args: &SessionExportArgs) -> Result<()> {
     if args.all {
         if args.session_id.is_some() {
-            bail!("--all cannot be combined with SESSION_ID");
+            bail!("--all cannot be combined with SESSION");
         }
         if matches!(args.format, Some(ExportFormat::Markdown)) {
             bail!("--all only supports JSON backup export");
@@ -393,7 +635,7 @@ fn validate_session_export_args(args: &SessionExportArgs) -> Result<()> {
     }
 
     if args.session_id.is_none() {
-        bail!("missing session id; provide SESSION_ID or --all");
+        bail!("missing session reference; provide SESSION or --all");
     }
     Ok(())
 }
@@ -433,6 +675,9 @@ fn command_mode(command: Option<&Commands>) -> &'static str {
         Some(Commands::Run(_)) => "run",
         Some(Commands::Tool { .. }) => "tool",
         Some(Commands::Mcp { .. }) => "mcp",
+        Some(Commands::Session {
+            command: SessionCommand::Continue(_),
+        }) => "tui_resume",
         Some(Commands::Session { .. }) => "session",
         Some(Commands::Config { .. }) => "config",
         Some(Commands::Metrics { .. }) => "metrics",
@@ -650,10 +895,13 @@ fn load_instruction_memory(cfg: &config::MeowConfig) -> Result<InstructionMemory
     InstructionMemory::load(cfg, &cwd)
 }
 
-fn build_instruction_context_messages(
+fn load_bounded_context(
+    state: &StateStore,
+    session_id: &str,
+    context_window: usize,
     instruction_memory: &InstructionMemory,
-) -> Vec<ContextMessage> {
-    instruction_memory
+) -> Result<Vec<ContextMessage>> {
+    let mut context_messages = instruction_memory
         .effective_context_block()
         .map(|content| {
             vec![ContextMessage {
@@ -661,7 +909,70 @@ fn build_instruction_context_messages(
                 content,
             }]
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    context_messages.extend(
+        state
+            .get_recent_messages(session_id, context_window)?
+            .into_iter()
+            .map(|item| ContextMessage {
+                role: item.role,
+                content: item.content,
+            }),
+    );
+
+    Ok(context_messages)
+}
+
+fn resolve_or_create_session(
+    state: &StateStore,
+    session_ref: Option<&str>,
+    default_title: &str,
+) -> Result<String> {
+    if let Some(reference) = session_ref {
+        let normalized = reference.trim();
+        if normalized.is_empty() {
+            bail!("session reference must not be empty");
+        }
+
+        let id_match = state.get_session(normalized)?;
+        let mut title_matches = state.find_sessions_by_title(normalized)?;
+
+        if let Some(session) = id_match {
+            if title_matches
+                .iter()
+                .any(|title_match| title_match.id != session.id)
+            {
+                let title_ids = title_matches
+                    .iter()
+                    .map(|item| item.id.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "session reference `{normalized}` is ambiguous; it matches session id `{}` and title matches [{title_ids}]",
+                    session.id
+                );
+            }
+            return Ok(session.id);
+        }
+
+        match title_matches.len() {
+            0 => state.create_session(Some(normalized)),
+            1 => Ok(title_matches.remove(0).id),
+            _ => {
+                let ids = title_matches
+                    .iter()
+                    .map(|session| session.id.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "session reference `{normalized}` is ambiguous; multiple sessions share this title: {ids}"
+                );
+            }
+        }
+    } else {
+        state.create_session(Some(default_title))
+    }
 }
 
 fn truncate_display(value: &str, max_chars: usize) -> String {
@@ -706,6 +1017,7 @@ fn shared_interrupt_flag() -> Result<Arc<AtomicBool>> {
 mod tests {
     use super::*;
     use crate::state::{StateSnapshot, TelemetrySummary};
+    use serde_json::Value;
     use uuid::Uuid;
 
     fn temp_db_path(prefix: &str) -> PathBuf {
@@ -787,6 +1099,67 @@ mod tests {
             serde_json::from_str(&payload).expect("snapshot json should parse");
         assert!(!snapshot.sessions.is_empty());
         assert!(!snapshot.messages.is_empty());
+    }
+
+    #[test]
+    fn export_session_accepts_title_reference() {
+        let db_path = temp_db_path("meow-app-export-title-ref");
+        let out_path = temp_output_path("meow-app-export-title-ref");
+        let state = StateStore::open(&db_path).expect("state store should open");
+
+        let session_id = state
+            .create_session(Some("named-session"))
+            .expect("session should be created");
+        state
+            .add_message(&session_id, "user", "hello title export")
+            .expect("message should be added");
+
+        export_session(
+            &state,
+            SessionExportArgs {
+                session_id: Some("named-session".to_owned()),
+                all: false,
+                format: Some(ExportFormat::Markdown),
+                output: Some(out_path.clone()),
+            },
+        )
+        .expect("export by title should succeed");
+
+        let content = fs::read_to_string(&out_path).expect("exported file should be readable");
+        assert!(content.contains("hello title export"));
+    }
+
+    #[test]
+    fn fork_session_clones_message_history() {
+        let db_path = temp_db_path("meow-app-fork-session");
+        let state = StateStore::open(&db_path).expect("state store should open");
+
+        let source_id = state
+            .create_session(Some("fork-source"))
+            .expect("session should be created");
+        state
+            .add_message(&source_id, "user", "hello fork")
+            .expect("message should be added");
+
+        fork_session(
+            &state,
+            SessionForkArgs {
+                session: "fork-source".to_owned(),
+                title: Some("fork-branch".to_owned()),
+            },
+        )
+        .expect("fork command should succeed");
+
+        let branch = state
+            .find_sessions_by_title("fork-branch")
+            .expect("fork sessions should query");
+        assert_eq!(branch.len(), 1);
+
+        let fork_messages = state
+            .get_messages(&branch[0].id)
+            .expect("fork messages should load");
+        assert_eq!(fork_messages.len(), 1);
+        assert_eq!(fork_messages[0].content, "hello fork");
     }
 
     #[test]
@@ -898,5 +1271,71 @@ mod tests {
         assert_eq!(summary.response_failures, 1);
         assert_eq!(summary.error_categories.len(), 1);
         assert_eq!(summary.error_categories[0].kind, "timeout");
+    }
+
+    #[test]
+    fn command_mode_maps_session_continue_to_tui_resume() {
+        let command = Commands::Session {
+            command: SessionCommand::Continue(crate::cli::SessionContinueArgs {
+                session: "daily".to_owned(),
+            }),
+        };
+        assert_eq!(command_mode(Some(&command)), "tui_resume");
+    }
+
+    #[test]
+    fn ask_json_error_payload_shape_is_stable() {
+        let payload = AskJsonErrorOutput {
+            session_id: "session-1",
+            profile: "default",
+            provider: "openai",
+            model: "gpt-4.1",
+            status: "error",
+            error_kind: "timeout",
+            error: "request timed out",
+        };
+
+        let raw = serde_json::to_string(&payload).expect("payload should serialize");
+        let value: Value = serde_json::from_str(&raw).expect("payload should parse");
+        assert_eq!(value["status"], "error");
+        assert_eq!(value["error_kind"], "timeout");
+        assert_eq!(value["session_id"], "session-1");
+        assert_eq!(value["provider"], "openai");
+    }
+
+    #[test]
+    fn run_json_error_payload_shape_is_stable() {
+        let payload = RunJsonErrorOutput {
+            run_id: "run-1",
+            session_id: "session-1",
+            profile: "default",
+            provider: "openai",
+            model: "gpt-4.1",
+            status: "error",
+            error_kind: "auth",
+            error: "unauthorized",
+        };
+
+        let raw = serde_json::to_string(&payload).expect("payload should serialize");
+        let value: Value = serde_json::from_str(&raw).expect("payload should parse");
+        assert_eq!(value["status"], "error");
+        assert_eq!(value["error_kind"], "auth");
+        assert_eq!(value["run_id"], "run-1");
+        assert_eq!(value["session_id"], "session-1");
+    }
+
+    #[test]
+    fn resolve_or_create_session_creates_new_session_for_unknown_reference() {
+        let db_path = temp_db_path("meow-app-create-session-ref");
+        let state = StateStore::open(&db_path).expect("state store should open");
+
+        let session_id = resolve_or_create_session(&state, Some("phase4-demo"), "ask")
+            .expect("unknown reference should create a new session");
+
+        let stored = state
+            .get_session(&session_id)
+            .expect("session query should succeed")
+            .expect("created session should exist");
+        assert_eq!(stored.title.as_deref(), Some("phase4-demo"));
     }
 }

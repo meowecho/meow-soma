@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use chrono::{Duration, Utc};
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -208,6 +208,121 @@ impl StateStore {
         }
 
         Ok(sessions)
+    }
+
+    pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, created_at, updated_at FROM sessions WHERE id = ?1 LIMIT 1",
+        )?;
+
+        let session = stmt
+            .query_row(params![session_id], |row| {
+                Ok(SessionRecord {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            })
+            .optional()?;
+
+        Ok(session)
+    }
+
+    pub fn find_sessions_by_title(&self, title: &str) -> Result<Vec<SessionRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, created_at, updated_at FROM sessions WHERE title = ?1 ORDER BY updated_at DESC, id ASC",
+        )?;
+
+        let rows = stmt.query_map(params![title], |row| {
+            Ok(SessionRecord {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                created_at: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        })?;
+
+        let mut sessions = Vec::new();
+        for row in rows {
+            sessions.push(row?);
+        }
+
+        Ok(sessions)
+    }
+
+    pub fn resolve_session_ref(&self, session_ref: &str) -> Result<SessionRecord> {
+        let normalized = session_ref.trim();
+        if normalized.is_empty() {
+            bail!("session reference must not be empty");
+        }
+
+        let id_match = self.get_session(normalized)?;
+        let mut title_matches = self.find_sessions_by_title(normalized)?;
+
+        if let Some(session) = id_match {
+            if title_matches
+                .iter()
+                .any(|title_match| title_match.id != session.id)
+            {
+                let title_ids = title_matches
+                    .iter()
+                    .map(|item| item.id.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "session reference `{normalized}` is ambiguous; it matches session id `{}` and title matches [{title_ids}]",
+                    session.id
+                );
+            }
+            return Ok(session);
+        }
+
+        match title_matches.len() {
+            0 => bail!(
+                "session not found for reference `{normalized}` (expected session id or exact title)"
+            ),
+            1 => Ok(title_matches.remove(0)),
+            _ => {
+                let ids = title_matches
+                    .iter()
+                    .map(|session| session.id.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "session reference `{normalized}` is ambiguous; multiple sessions share this title: {ids}"
+                );
+            }
+        }
+    }
+
+    pub fn fork_session(&self, source_session_id: &str, title: Option<&str>) -> Result<String> {
+        let source = self
+            .get_session(source_session_id)?
+            .with_context(|| format!("source session not found: {source_session_id}"))?;
+
+        let new_session_id = Uuid::new_v4().to_string();
+        let now = now_rfc3339();
+        let resolved_title = title
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_owned())
+            .or_else(|| source.title.map(|value| format!("{value} (fork)")));
+
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![new_session_id, resolved_title, now, now],
+        )?;
+
+        tx.execute(
+            "INSERT INTO messages (session_id, role, content, created_at) \
+             SELECT ?1, role, content, created_at FROM messages WHERE session_id = ?2 ORDER BY id ASC",
+            params![new_session_id, source_session_id],
+        )?;
+
+        tx.commit()?;
+        Ok(new_session_id)
     }
 
     pub fn get_messages(&self, session_id: &str) -> Result<Vec<MessageRecord>> {
@@ -1326,6 +1441,118 @@ mod tests {
         assert_eq!(summary.error_categories.len(), 1);
         assert_eq!(summary.error_categories[0].kind, "timeout");
         assert_eq!(summary.error_categories[0].count, 1);
+    }
+
+    #[test]
+    fn resolve_session_ref_supports_id_and_exact_title() {
+        let db_path = temp_db_path("meow-state-resolve-session-ref");
+        let store = StateStore::open(&db_path).expect("state store should open");
+
+        let session_id = store
+            .create_session(Some("focus-session"))
+            .expect("session should be created");
+
+        let by_id = store
+            .resolve_session_ref(&session_id)
+            .expect("session id should resolve");
+        assert_eq!(by_id.id, session_id);
+
+        let by_title = store
+            .resolve_session_ref("focus-session")
+            .expect("session title should resolve");
+        assert_eq!(by_title.id, session_id);
+    }
+
+    #[test]
+    fn resolve_session_ref_rejects_ambiguous_title() {
+        let db_path = temp_db_path("meow-state-resolve-ambiguous");
+        let store = StateStore::open(&db_path).expect("state store should open");
+
+        store
+            .create_session(Some("duplicate-title"))
+            .expect("first session should be created");
+        store
+            .create_session(Some("duplicate-title"))
+            .expect("second session should be created");
+
+        let err = store
+            .resolve_session_ref("duplicate-title")
+            .expect_err("ambiguous title should fail");
+        assert!(err.to_string().contains("ambiguous"));
+    }
+
+    #[test]
+    fn resolve_session_ref_rejects_id_title_collision() {
+        let db_path = temp_db_path("meow-state-resolve-id-title-collision");
+        let store = StateStore::open(&db_path).expect("state store should open");
+
+        let id_session = store
+            .create_session(Some("primary-title"))
+            .expect("id session should be created");
+        let collision = store
+            .create_session(Some(&id_session))
+            .expect("collision session should be created");
+        assert_ne!(collision, id_session);
+
+        let err = store
+            .resolve_session_ref(&id_session)
+            .expect_err("id/title collision should be ambiguous");
+        assert!(err.to_string().contains("ambiguous"));
+    }
+
+    #[test]
+    fn fork_session_clones_messages_and_allows_title_override() {
+        let db_path = temp_db_path("meow-state-fork-session");
+        let store = StateStore::open(&db_path).expect("state store should open");
+
+        let source_id = store
+            .create_session(Some("source"))
+            .expect("source session should be created");
+        store
+            .add_message(&source_id, "user", "hello")
+            .expect("user message should be inserted");
+        store
+            .add_message(&source_id, "assistant", "world")
+            .expect("assistant message should be inserted");
+
+        let fork_id = store
+            .fork_session(&source_id, Some("branch-a"))
+            .expect("fork should succeed");
+        assert_ne!(fork_id, source_id);
+
+        let fork_session = store
+            .get_session(&fork_id)
+            .expect("fork session lookup should succeed")
+            .expect("fork session should exist");
+        assert_eq!(fork_session.title.as_deref(), Some("branch-a"));
+
+        let source_messages = store
+            .get_messages(&source_id)
+            .expect("source messages should load");
+        let fork_messages = store
+            .get_messages(&fork_id)
+            .expect("fork messages should load");
+        assert_eq!(fork_messages.len(), source_messages.len());
+        assert_eq!(
+            fork_messages
+                .iter()
+                .map(|item| &item.role)
+                .collect::<Vec<_>>(),
+            source_messages
+                .iter()
+                .map(|item| &item.role)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            fork_messages
+                .iter()
+                .map(|item| &item.content)
+                .collect::<Vec<_>>(),
+            source_messages
+                .iter()
+                .map(|item| &item.content)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

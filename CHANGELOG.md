@@ -7,6 +7,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ## [Unreleased]
 
 ### Added
+- Session lifecycle commands:
+  - `meow session continue <session>` to resume an existing session directly in TUI
+  - `meow session fork <session> [--title <title>]` to branch a session with cloned message history
+- Headless response formatting for automation:
+  - `meow ask ... --output json`
+  - `meow run ... --output json`
 - Canonical security policy modes in runtime config: `allow`, `ask`, and `deny` (with legacy alias compatibility).
 - Deterministic policy rule specifier support:
   - `shell:<command-prefix>`
@@ -25,6 +31,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - TUI inline slash suggestions: typing `/` now opens an in-context command list above the input prompt.
 
 ### Changed
+- `meow ask` and `meow run` now support `--session <id|title>` to continue existing session context.
+- Session references now resolve by id or exact title with explicit ambiguity errors for duplicate titles.
+- Session export now accepts exact-title references in addition to raw session ids.
+- `--output json` for `ask` and `run` now emits deterministic JSON payloads for both success and error outcomes.
 - Policy evaluation order is now deterministic: denylist -> mode semantics -> allowlist.
 - `ask` mode keeps non-risky tool execution frictionless while requiring approval for risky actions.
 - `deny` mode now blocks risky actions and allows only explicit allowlisted non-risky actions.

@@ -30,6 +30,7 @@ const THEME_OK: Color = Color::Rgb(130, 198, 160);
 const THEME_WARN: Color = Color::Rgb(220, 192, 120);
 const THEME_ERROR: Color = Color::Rgb(224, 130, 138);
 const MAX_DASHBOARD_HEIGHT_COMPACT: u16 = 22;
+const MAX_TRANSCRIPT_ENTRIES: usize = 400;
 const MASCOT_FRAMES: [[&str; 5]; 4] = [
     [
         "       /\\_/\\",
@@ -219,8 +220,12 @@ pub fn run_tui(
     profile_name: &str,
     context_window: usize,
     cancellation: &CancellationToken,
+    resume_session_id: Option<&str>,
 ) -> Result<()> {
-    let session_id = state.create_session(Some("tui"))?;
+    let session_id = match resume_session_id {
+        Some(existing) => existing.to_owned(),
+        None => state.create_session(Some("tui"))?,
+    };
     let provider = format!("{}:{}", runtime.provider_name(), runtime.provider_model());
 
     let mut ui = TuiState::new(
@@ -229,6 +234,20 @@ pub fn run_tui(
         provider,
         instruction_memory,
     );
+
+    if resume_session_id.is_some() {
+        let existing_messages = state.get_recent_messages(&session_id, MAX_TRANSCRIPT_ENTRIES)?;
+        for item in existing_messages {
+            ui.transcript.push(TranscriptEntry {
+                role: transcript_role_from_message_role(&item.role),
+                content: item.content,
+            });
+        }
+        ui.enforce_transcript_bound();
+        ui.mark_transcript_changed();
+        ui.scroll_transcript_bottom();
+        ui.status = format!("resumed session {}", session_id);
+    }
 
     let stdout = io::stdout();
     enable_raw_mode().context("failed to enable raw mode")?;
@@ -1521,9 +1540,8 @@ impl TuiState {
     }
 
     fn enforce_transcript_bound(&mut self) {
-        const MAX_ENTRIES: usize = 400;
-        if self.transcript.len() > MAX_ENTRIES {
-            let extra = self.transcript.len() - MAX_ENTRIES;
+        if self.transcript.len() > MAX_TRANSCRIPT_ENTRIES {
+            let extra = self.transcript.len() - MAX_TRANSCRIPT_ENTRIES;
             self.transcript.drain(0..extra);
         }
     }
@@ -2388,6 +2406,16 @@ fn render_entry(entry: &TranscriptEntry) -> Line<'static> {
     ])
 }
 
+fn transcript_role_from_message_role(role: &str) -> String {
+    if role.eq_ignore_ascii_case("user") {
+        "you".to_owned()
+    } else if role.eq_ignore_ascii_case("assistant") {
+        "meow".to_owned()
+    } else {
+        role.to_owned()
+    }
+}
+
 fn render_activity(entry: &ActivityEntry) -> Line<'static> {
     let kind_color = match entry.kind.as_str() {
         "error" => THEME_ERROR,
@@ -2501,6 +2529,13 @@ mod tests {
             .join("");
 
         assert_eq!(plain, "you: hello");
+    }
+
+    #[test]
+    fn transcript_role_mapping_keeps_expected_labels() {
+        assert_eq!(transcript_role_from_message_role("user"), "you");
+        assert_eq!(transcript_role_from_message_role("assistant"), "meow");
+        assert_eq!(transcript_role_from_message_role("tool"), "tool");
     }
 
     #[test]

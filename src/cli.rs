@@ -55,12 +55,34 @@ pub enum Commands {
 pub struct AskArgs {
     #[arg(value_name = "PROMPT")]
     pub prompt: String,
+
+    #[arg(
+        long,
+        short = 's',
+        value_name = "SESSION",
+        help = "Continue an existing session by id or exact title"
+    )]
+    pub session: Option<String>,
+
+    #[arg(long, value_enum, default_value = "text")]
+    pub output: ResponseOutput,
 }
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
     #[arg(value_name = "GOAL")]
     pub goal: String,
+
+    #[arg(
+        long,
+        short = 's',
+        value_name = "SESSION",
+        help = "Continue an existing session by id or exact title"
+    )]
+    pub session: Option<String>,
+
+    #[arg(long, value_enum, default_value = "text")]
+    pub output: ResponseOutput,
 }
 
 #[derive(Debug, Subcommand)]
@@ -102,8 +124,12 @@ pub struct McpServeArgs {
 pub enum SessionCommand {
     /// List saved sessions.
     List,
-    /// Show messages for one session.
+    /// Show messages for one session by id or exact title.
     Resume(SessionResumeArgs),
+    /// Open TUI and continue one session by id or exact title.
+    Continue(SessionContinueArgs),
+    /// Create a branch session by cloning messages from an existing session.
+    Fork(SessionForkArgs),
     /// Export one session to JSON or Markdown.
     Export(SessionExportArgs),
     /// Import a full JSON backup snapshot.
@@ -112,13 +138,28 @@ pub enum SessionCommand {
 
 #[derive(Debug, Args)]
 pub struct SessionResumeArgs {
-    #[arg(value_name = "SESSION_ID")]
-    pub session_id: String,
+    #[arg(value_name = "SESSION")]
+    pub session: String,
+}
+
+#[derive(Debug, Args)]
+pub struct SessionContinueArgs {
+    #[arg(value_name = "SESSION")]
+    pub session: String,
+}
+
+#[derive(Debug, Args)]
+pub struct SessionForkArgs {
+    #[arg(value_name = "SESSION")]
+    pub session: String,
+
+    #[arg(long, value_name = "TITLE")]
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct SessionExportArgs {
-    #[arg(value_name = "SESSION_ID", required_unless_present = "all")]
+    #[arg(value_name = "SESSION", required_unless_present = "all")]
     pub session_id: Option<String>,
 
     #[arg(
@@ -145,6 +186,12 @@ pub struct SessionImportArgs {
 pub enum ExportFormat {
     Json,
     Markdown,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum ResponseOutput {
+    Text,
+    Json,
 }
 
 #[derive(Debug, Subcommand)]
@@ -246,6 +293,8 @@ mod tests {
         };
 
         assert_eq!(args.prompt, "hello world");
+        assert!(args.session.is_none());
+        assert_eq!(args.output, ResponseOutput::Text);
     }
 
     #[test]
@@ -259,6 +308,52 @@ mod tests {
         };
 
         assert_eq!(args.goal, "implement phase 6");
+        assert!(args.session.is_none());
+        assert_eq!(args.output, ResponseOutput::Text);
+    }
+
+    #[test]
+    fn parses_ask_command_with_session_and_json_output() {
+        let cli = Cli::try_parse_from([
+            "meow",
+            "ask",
+            "hello world",
+            "--session",
+            "daily",
+            "--output",
+            "json",
+        ])
+        .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Ask(args) = command else {
+            panic!("expected ask command");
+        };
+
+        assert_eq!(args.session.as_deref(), Some("daily"));
+        assert_eq!(args.output, ResponseOutput::Json);
+    }
+
+    #[test]
+    fn parses_run_command_with_session_and_json_output() {
+        let cli = Cli::try_parse_from([
+            "meow",
+            "run",
+            "implement phase 6",
+            "--session",
+            "work-1",
+            "--output",
+            "json",
+        ])
+        .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Run(args) = command else {
+            panic!("expected run command");
+        };
+
+        assert_eq!(args.session.as_deref(), Some("work-1"));
+        assert_eq!(args.output, ResponseOutput::Json);
     }
 
     #[test]
@@ -481,7 +576,49 @@ mod tests {
             panic!("expected resume command");
         };
 
-        assert_eq!(args.session_id, "session-1");
+        assert_eq!(args.session, "session-1");
+    }
+
+    #[test]
+    fn parses_session_continue_command() {
+        let cli = Cli::try_parse_from(["meow", "session", "continue", "daily"])
+            .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Session { command } = command else {
+            panic!("expected session command");
+        };
+
+        let SessionCommand::Continue(args) = command else {
+            panic!("expected continue command");
+        };
+
+        assert_eq!(args.session, "daily");
+    }
+
+    #[test]
+    fn parses_session_fork_command_with_title() {
+        let cli = Cli::try_parse_from([
+            "meow",
+            "session",
+            "fork",
+            "session-1",
+            "--title",
+            "branch-a",
+        ])
+        .expect("parse should succeed");
+
+        let command = cli.command.expect("command should exist");
+        let Commands::Session { command } = command else {
+            panic!("expected session command");
+        };
+
+        let SessionCommand::Fork(args) = command else {
+            panic!("expected fork command");
+        };
+
+        assert_eq!(args.session, "session-1");
+        assert_eq!(args.title.as_deref(), Some("branch-a"));
     }
 
     #[test]

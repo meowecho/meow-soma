@@ -24,7 +24,7 @@ Archived completed cycle: `docs/plans/archive/execution-plan-2026-q1.md`.
 | 1 | Built-in slash command surface expansion | Done | cli/tui maintainer | current cycle |
 | 2 | Instruction memory system (project/user/local) | Done | runtime/config maintainer | current cycle |
 | 3 | Permission modes and rule engine hardening | Done | policy/runtime maintainer | current cycle |
-| 4 | CLI session lifecycle parity (resume/fork/headless) | Planned | cli/runtime maintainer | current cycle |
+| 4 | CLI session lifecycle parity (resume/fork/headless) | Done | cli/runtime maintainer | current cycle |
 
 ## Current Cycle Phase Plan
 
@@ -166,7 +166,7 @@ Known risks:
 ### Phase 4 - CLI Session Lifecycle Parity
 
 Status:
-- Planned
+- Done
 
 Objective:
 - Close lifecycle gaps for long-running and automation-friendly usage.
@@ -193,6 +193,14 @@ Deliverables:
 Definition of done:
 - Users can reliably continue, resume, and fork sessions.
 - Headless workflows are deterministic and script-friendly.
+
+Completion notes:
+- Added session reference resolution by `id` or exact `title` with deterministic ambiguity errors.
+- Added `meow session continue <session>` to re-enter TUI on an existing session transcript.
+- Added `meow session fork <session> [--title <title>]` for safe session branching with message history cloning.
+- Extended `meow ask` and `meow run` with `--session <id|title>` for lifecycle continuity.
+- Added deterministic machine-readable output for headless automation via `--output json` on `ask` and `run`.
+- Added regression coverage for session ref resolution, fork behavior, title-based export, and updated command surface.
 
 Verification commands:
 - `cargo fmt --check`

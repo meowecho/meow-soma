@@ -90,7 +90,7 @@ fn session_help_lists_subcommands() {
     assert!(output.status.success(), "expected success");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for command in ["list", "resume", "export", "import"] {
+    for command in ["list", "resume", "continue", "fork", "export", "import"] {
         assert!(
             stdout.contains(command),
             "session help should list `{command}`"

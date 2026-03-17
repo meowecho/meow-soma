@@ -65,7 +65,7 @@ Meow Soma is the body.
 - Execute higher-level goals: `meow run "..."`
 - List and execute tools with policy checks: `meow tool list|exec`
 - Run MCP server over stdio: `meow mcp serve --transport stdio`
-- Inspect, resume, export, and import sessions: `meow session ...`
+- Inspect, resume/continue, fork, export, and import sessions: `meow session ...`
 - Inspect/export runtime telemetry: `meow metrics summary|export`
 
 ## Quickstart
@@ -117,12 +117,12 @@ cargo run -- --config config/dev.local.toml ask "hello"
 ## Command Surface
 
 - `meow` (default: start full-screen TUI)
-- `meow ask "<prompt>"`
-- `meow run "<goal>"`
+- `meow ask "<prompt>" [--session <id|title>] [--output text|json]`
+- `meow run "<goal>" [--session <id|title>] [--output text|json]`
 - `meow tool list`
 - `meow tool exec <tool> ... [--approve]`
 - `meow mcp serve --transport stdio`
-- `meow session list|resume|export|import`
+- `meow session list|resume|continue|fork|export|import`
 - `meow config init|setup|validate|path`
 - `meow metrics summary [--days N]`
 - `meow metrics export [--days N] [-o metrics.json]`
